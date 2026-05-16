@@ -71,7 +71,16 @@ export function TrackList({
     )
   }
 
-  const items = tracks.data ?? []
+  // Sort by BPM ascending so same-tempo tracks cluster together (tracks that
+  // beat-match each other end up adjacent). Unanalyzed tracks go last.
+  const items = [...(tracks.data ?? [])].sort((a, b) => {
+    const ba = a.analysis?.bpm
+    const bb = b.analysis?.bpm
+    if (ba == null && bb == null) return 0
+    if (ba == null) return 1
+    if (bb == null) return -1
+    return ba - bb
+  })
   if (items.length === 0) {
     return (
       <div className="p-4 text-sm text-muted-foreground">

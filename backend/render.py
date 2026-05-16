@@ -80,22 +80,32 @@ def _pitch_shift_wav(in_wav: Path, out_wav: Path, semitones: float) -> None:
 
 
 def _x264_args(proxy: bool) -> list[str]:
+    # Force a consistent resolution AND framerate across every clip — sources
+    # with mixed dimensions (1080p + 4K) or framerates (25 fps + 23.976) make
+    # the concat demuxer emit junk timestamps and double the output duration.
     if proxy:
         return [
             "-vf", "scale=-2:720",
             "-c:v", "libx264", "-crf", "28", "-preset", "ultrafast",
         ]
-    return ["-c:v", "libx264", "-crf", "18", "-preset", "medium"]
+    return [
+        "-vf", "scale=-2:1080",
+        "-c:v", "libx264", "-crf", "18", "-preset", "medium",
+    ]
 
 
 def _trim_video_clip(src: Path, start_s: float, duration_s: float, out: Path, proxy: bool = False) -> None:
     out.parent.mkdir(parents=True, exist_ok=True)
     a_bitrate = "192k" if proxy else "320k"
+    # Force a constant 30 fps + 44.1 kHz stereo so all clips have IDENTICAL
+    # framerate and audio params. Mixed framerates (25 vs 23.976) cause the
+    # concat demuxer to emit a video with bad timestamps, doubling duration.
     cmd = [
         "ffmpeg", "-y", "-ss", f"{start_s:.3f}", "-i", str(src),
         "-t", f"{duration_s:.3f}",
+        "-r", "30",
         *_x264_args(proxy),
-        "-c:a", "aac", "-b:a", a_bitrate,
+        "-c:a", "aac", "-b:a", a_bitrate, "-ar", "44100", "-ac", "2",
         "-pix_fmt", "yuv420p",
         "-movflags", "+faststart",
         str(out),
@@ -525,17 +535,24 @@ def render_mix(
         progress("render", 70.0, "Mixing audio with crossfades")
     crossfade_s = _bars_to_seconds(crossfade_bars, target_bpm)
 
+    # IMPORTANT: stem-aware crossfade functions take *full clean clips* on both
+    # sides — they can't accept the running merged audio (which is already
+    # mixed-down). So we only use them on the FIRST transition (i==1). For
+    # subsequent merges (i>=2) we fall back to equal-power against the running
+    # current_audio. Before this fix, the stem-aware branches were dropping
+    # everything earlier than clip[i-1] from the mix.
     current_audio = clip_audios[0]
     for i in range(1, n_clips):
         merged = work / f"merged_{i:02d}.wav"
         a_stems = clip_stems[i - 1]
         b_stems = clip_stems[i]
-        if use_eq_swap and a_stems and b_stems:
+        can_use_stems = i == 1 and a_stems and b_stems
+        if can_use_stems and use_eq_swap:
             try:
                 _eq_bass_swap_crossfade(a_stems, b_stems, crossfade_s, merged)
             except Exception:
                 _equal_power_crossfade(current_audio, clip_audios[i], crossfade_s, merged)
-        elif use_stem_cf and a_stems and b_stems:
+        elif can_use_stems and use_stem_cf:
             try:
                 _stem_aware_crossfade(a_stems, b_stems, crossfade_s, merged)
             except Exception:

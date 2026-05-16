@@ -69,16 +69,26 @@ export function VideoPreview({
     videoRef.current?.pause()
   }, [pauseRequestKey])
 
-  // Push the video's playhead up to the parent so the waveform can follow it.
+  // Push the video's playhead up to the parent so the waveform can follow.
+  // Throttled to ~5fps: native `timeupdate` fires too often and causes the
+  // whole App tree to re-render every ~50ms which makes playback feel laggy.
   useEffect(() => {
     const video = videoRef.current
     if (!video || !onTimeUpdate) return
-    const handler = () => onTimeUpdate(video.currentTime)
+    let last = 0
+    const minIntervalMs = 200
+    const handler = () => {
+      const now = performance.now()
+      if (now - last < minIntervalMs) return
+      last = now
+      onTimeUpdate(video.currentTime)
+    }
+    const seekedHandler = () => onTimeUpdate(video.currentTime) // always emit on user seek
     video.addEventListener("timeupdate", handler)
-    video.addEventListener("seeked", handler)
+    video.addEventListener("seeked", seekedHandler)
     return () => {
       video.removeEventListener("timeupdate", handler)
-      video.removeEventListener("seeked", handler)
+      video.removeEventListener("seeked", seekedHandler)
     }
   }, [onTimeUpdate])
 

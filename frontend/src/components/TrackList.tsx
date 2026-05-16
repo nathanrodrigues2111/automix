@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react"
-import { Check, ChevronDown, Loader2, Music, Play, Plus, Sparkles, Zap } from "lucide-react"
+import { Check, Loader2, Music, Pause, Play, Plus, Sparkles, Zap } from "lucide-react"
 import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -17,6 +17,9 @@ interface TrackListProps {
   onSelect: (track: Track) => void
   onAdd: (track: Track, drop?: Drop) => void
   onPreviewDrop?: (track: Track, drop: Drop) => void
+  onPausePreview?: () => void
+  /** "trackId:startS" of the drop currently playing (null if paused/idle). */
+  playingKey?: string | null
   /** Set of "trackId:startS" keys for drops already in the mix. */
   addedKeys?: Set<string>
 }
@@ -27,12 +30,13 @@ export function TrackList({
   onSelect,
   onAdd,
   onPreviewDrop,
+  onPausePreview,
+  playingKey,
   addedKeys,
 }: TrackListProps) {
   const tracks = useTracks()
   const analyze = useAnalyze()
   const [jobByTrack, setJobByTrack] = useState<Record<string, string>>({})
-  const [openDrops, setOpenDrops] = useState<string | null>(null)
 
   useEffect(() => {
     Object.entries(jobByTrack).forEach(([trackId, jobId]) => {
@@ -161,7 +165,6 @@ export function TrackList({
                 ) : (
                   (() => {
                     const drops = t.analysis?.drops ?? []
-                    const isOpen = openDrops === t.id
                     if (drops.length === 0) {
                       return (
                         <Button
@@ -175,82 +178,78 @@ export function TrackList({
                       )
                     }
                     return (
-                      <div className="flex w-full min-w-0 flex-col gap-1.5">
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          className="w-full justify-between gap-2 px-2"
-                          onClick={() => setOpenDrops(isOpen ? null : t.id)}
-                        >
-                          <span className="flex items-center gap-1.5">
-                            <Plus className="h-3 w-3" />
-                            Pick a drop ({drops.length})
-                          </span>
-                          <ChevronDown
-                            className={cn(
-                              "h-3 w-3 shrink-0 text-muted-foreground transition-transform",
-                              isOpen && "rotate-180",
-                            )}
-                          />
-                        </Button>
-                        {isOpen && (
-                          <ul className="space-y-0.5 rounded-md border border-border/60 bg-background/60 p-1">
-                            {drops.map((d, i) => {
-                              const isAdded = !!addedKeys?.has(
-                                `${t.id}:${d.start_s.toFixed(2)}`,
-                              )
-                              return (
-                              <li key={i} className="flex items-center gap-1">
-                                <button
-                                  type="button"
-                                  className="flex h-7 w-7 shrink-0 items-center justify-center rounded text-primary hover:bg-primary/10"
-                                  onClick={() => onPreviewDrop?.(t, d)}
-                                  title="Preview this drop"
-                                  aria-label={`Preview drop ${i + 1}`}
-                                >
-                                  <Play className="h-3 w-3 fill-current" />
-                                </button>
-                                <button
-                                  type="button"
-                                  className={cn(
-                                    "flex min-w-0 flex-1 items-center justify-between gap-2 rounded px-2 py-1.5 text-left text-xs transition-colors hover:bg-accent/40",
-                                    isAdded &&
-                                      "bg-emerald-500/10 ring-1 ring-emerald-500/30",
+                      <ul className="flex w-full min-w-0 flex-col gap-1.5">
+                        {drops.map((d, i) => {
+                          const dropKey = `${t.id}:${d.start_s.toFixed(2)}`
+                          const isAdded = !!addedKeys?.has(dropKey)
+                          const isPlayingThis = playingKey === dropKey
+                          return (
+                            <li
+                              key={i}
+                              className={cn(
+                                "flex h-9 items-stretch overflow-hidden rounded-md border border-input bg-background shadow-xs transition-colors",
+                                isAdded
+                                  ? "border-emerald-500/40 bg-emerald-500/10"
+                                  : "hover:bg-accent/40",
+                              )}
+                            >
+                              <button
+                                type="button"
+                                className="flex w-9 shrink-0 items-center justify-center border-r border-input text-primary hover:bg-primary/15"
+                                onClick={() => {
+                                  if (isPlayingThis) onPausePreview?.()
+                                  else onPreviewDrop?.(t, d)
+                                }}
+                                title={
+                                  isPlayingThis
+                                    ? "Pause preview"
+                                    : "Preview this drop"
+                                }
+                                aria-label={
+                                  isPlayingThis
+                                    ? "Pause"
+                                    : `Preview drop ${i + 1}`
+                                }
+                              >
+                                {isPlayingThis ? (
+                                  <Pause className="h-3.5 w-3.5 fill-current" />
+                                ) : (
+                                  <Play className="h-3.5 w-3.5 fill-current" />
+                                )}
+                              </button>
+                              <button
+                                type="button"
+                                className="flex min-w-0 flex-1 items-center justify-between gap-2 px-3 text-left text-xs"
+                                onClick={() => {
+                                  onAdd(t, d)
+                                  toast.success(
+                                    `Added Drop ${i + 1} · ${formatDuration(
+                                      d.start_s,
+                                    )}–${formatDuration(d.end_s)}`,
+                                    {
+                                      description: formatTrackTitle(t.filename),
+                                    },
+                                  )
+                                }}
+                                title={`Add Drop ${i + 1} to the mix`}
+                              >
+                                <span className="flex shrink-0 items-center gap-1.5 font-medium">
+                                  {isAdded ? (
+                                    <Check className="h-3.5 w-3.5 text-emerald-400" />
+                                  ) : (
+                                    <Zap className="h-3.5 w-3.5 text-amber-400" />
                                   )}
-                                  onClick={() => {
-                                    onAdd(t, d)
-                                    setOpenDrops(null)
-                                    toast.success(
-                                      `Added Drop ${i + 1} · ${formatDuration(
-                                        d.start_s,
-                                      )}–${formatDuration(d.end_s)}`,
-                                      {
-                                        description: formatTrackTitle(
-                                          t.filename,
-                                        ),
-                                      },
-                                    )
-                                  }}
-                                  title={`Add Drop ${i + 1} to the mix`}
-                                >
-                                  <span className="flex shrink-0 items-center gap-1.5 font-medium">
-                                    {isAdded ? (
-                                      <Check className="h-3 w-3 text-emerald-400" />
-                                    ) : (
-                                      <Zap className="h-3 w-3 text-amber-400" />
-                                    )}
-                                    Drop {i + 1}
-                                  </span>
-                                  <span className="truncate font-mono tabular-nums text-muted-foreground">
-                                    {formatDuration(d.start_s)}–
-                                    {formatDuration(d.end_s)}
-                                  </span>
-                                </button>
-                              </li>
-                            )})}
-                          </ul>
-                        )}
-                      </div>
+                                  Drop {i + 1}
+                                </span>
+                                <span className="truncate font-mono tabular-nums text-muted-foreground">
+                                  {formatDuration(d.start_s)}–
+                                  {formatDuration(d.end_s)}
+                                </span>
+                              </button>
+                            </li>
+                          )
+                        })}
+                      </ul>
                     )
                   })()
                 )}

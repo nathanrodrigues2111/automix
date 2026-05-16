@@ -65,6 +65,11 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<ActiveTab>("tracks")
   const [playRequest, setPlayRequest] = useState<PlayRequest | null>(null)
   const [seekRequest, setSeekRequest] = useState<SeekRequest | null>(null)
+  const [pauseRequestKey, setPauseRequestKey] = useState<number | undefined>(
+    undefined,
+  )
+  const [previewingKey, setPreviewingKey] = useState<string | null>(null)
+  const [videoIsPlaying, setVideoIsPlaying] = useState(false)
 
   const trackById = useMemo(
     () => Object.fromEntries((tracks.data ?? []).map((t) => [t.id, t])),
@@ -88,6 +93,7 @@ export default function App() {
 
   const handlePreviewDrop = (t: Track, drop: Drop) => {
     setSelectedTrackId(t.id)
+    setPreviewingKey(`${t.id}:${drop.start_s.toFixed(2)}`)
     setPlayRequest({
       trackId: t.id,
       time: drop.start_s,
@@ -95,6 +101,10 @@ export default function App() {
       key: Date.now(),
     })
     setActiveTab("preview")
+  }
+
+  const handlePausePreview = () => {
+    setPauseRequestKey(Date.now())
   }
 
   const handleAdd = (t: Track, drop?: Drop) => {
@@ -209,6 +219,8 @@ export default function App() {
               onSelect={(t) => setSelectedTrackId(t.id)}
               onAdd={handleAdd}
               onPreviewDrop={handlePreviewDrop}
+              onPausePreview={handlePausePreview}
+              playingKey={videoIsPlaying ? previewingKey : null}
               addedKeys={addedKeys}
             />
           </div>
@@ -243,8 +255,10 @@ export default function App() {
                       ? playRequest
                       : null
                   }
+                  pauseRequestKey={pauseRequestKey}
                   seekRequest={seekRequest}
                   onTimeUpdate={setCurrentTime}
+                  onPlayingChange={setVideoIsPlaying}
                 />
               ) : (
                 <div className="flex aspect-video w-full flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-border/60 bg-gradient-to-b from-card/40 to-card/10 text-center">

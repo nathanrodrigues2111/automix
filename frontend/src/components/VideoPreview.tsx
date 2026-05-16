@@ -29,17 +29,45 @@ interface SeekRequest {
 interface VideoPreviewProps {
   track: Track | null
   playRequest?: PlayRequest | null
+  pauseRequestKey?: number
   seekRequest?: SeekRequest | null
   onTimeUpdate?: (time: number) => void
+  onPlayingChange?: (playing: boolean) => void
 }
 
 export function VideoPreview({
   track,
   playRequest,
+  pauseRequestKey,
   seekRequest,
   onTimeUpdate,
+  onPlayingChange,
 }: VideoPreviewProps) {
   const videoRef = useRef<HTMLVideoElement>(null)
+
+  // Bubble play/pause state up so other UI (drop picker) can show ▶/⏸.
+  useEffect(() => {
+    const video = videoRef.current
+    if (!video || !onPlayingChange) return
+    const onPlay = () => onPlayingChange(true)
+    const onPause = () => onPlayingChange(false)
+    video.addEventListener("play", onPlay)
+    video.addEventListener("playing", onPlay)
+    video.addEventListener("pause", onPause)
+    video.addEventListener("ended", onPause)
+    return () => {
+      video.removeEventListener("play", onPlay)
+      video.removeEventListener("playing", onPlay)
+      video.removeEventListener("pause", onPause)
+      video.removeEventListener("ended", onPause)
+    }
+  }, [onPlayingChange])
+
+  // External pause request (drop picker toggling off).
+  useEffect(() => {
+    if (pauseRequestKey === undefined) return
+    videoRef.current?.pause()
+  }, [pauseRequestKey])
 
   // Push the video's playhead up to the parent so the waveform can follow it.
   useEffect(() => {

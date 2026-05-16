@@ -5,6 +5,32 @@ export interface CamelotKey {
   letter: "A" | "B"
 }
 
+// Map Camelot number → hue (Mixed-In-Key-inspired wheel):
+//  1=red-orange, 2=orange, 3=yellow, 4=lime, 5=green, 6=teal,
+//  7=cyan, 8=blue, 9=indigo, 10=purple, 11=magenta, 12=pink-red
+export function camelotHue(num: number): number {
+  return ((num - 1) * 30 + 10) % 360
+}
+
+export interface CamelotColors {
+  bg: string
+  fg: string
+  border: string
+}
+
+export function camelotColors(key: string | null | undefined): CamelotColors | null {
+  const k = parseCamelot(key)
+  if (!k) return null
+  const hue = camelotHue(k.number)
+  const sat = k.letter === "A" ? 55 : 78
+  const lt = k.letter === "A" ? 52 : 62
+  return {
+    bg: `hsl(${hue} ${sat}% ${lt}% / 0.18)`,
+    fg: `hsl(${hue} ${Math.min(100, sat + 20)}% ${Math.min(85, lt + 28)}%)`,
+    border: `hsl(${hue} ${sat}% ${lt}% / 0.5)`,
+  }
+}
+
 export function parseCamelot(key: string | undefined | null): CamelotKey | null {
   if (!key) return null
   const m = /^(\d{1,2})([AB])$/i.exec(key.trim())

@@ -19,6 +19,7 @@ import { CSS } from "@dnd-kit/utilities"
 import {
   ChevronDown,
   ChevronUp,
+  Eye,
   GripVertical,
   Layers,
   Trash2,
@@ -41,7 +42,8 @@ import {
 import { Separator } from "@/components/ui/separator"
 import type { RenderClip, RenderConfig, Track } from "@/api/types"
 import { autoOrderTracks } from "@/lib/camelot"
-import { formatDuration } from "@/lib/format"
+import { formatDuration, formatTrackTitle } from "@/lib/format"
+import { KeyChip } from "@/components/KeyChip"
 
 export interface EditorClip extends RenderClip {
   uid: string
@@ -55,6 +57,7 @@ interface MixEditorProps {
   setClips: (clips: EditorClip[]) => void
   config: Omit<RenderConfig, "clips">
   setConfig: (config: Omit<RenderConfig, "clips">) => void
+  onPreview: () => void
   onRender: () => void
   onSaveProject: () => void
   onLoadProject: () => void
@@ -66,6 +69,7 @@ export function MixEditor({
   setClips,
   config,
   setConfig,
+  onPreview,
   onRender,
   onSaveProject,
   onLoadProject,
@@ -139,28 +143,56 @@ export function MixEditor({
   }
 
   return (
-    <Card className="flex h-full flex-col">
-      <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
-        <CardTitle className="flex items-center gap-2 text-base">
-          <Layers className="h-4 w-4" /> Mix Editor
-        </CardTitle>
-        <div className="flex gap-2">
-          <Button variant="outline" size="sm" onClick={onLoadProject}>
-            Load
+    <Card className="flex h-full flex-col border-border/60 bg-card/40 backdrop-blur">
+      <CardHeader className="space-y-3 pb-3">
+        <div className="flex items-center justify-between gap-2">
+          <CardTitle className="flex shrink-0 items-center gap-2 text-base">
+            <Layers className="h-4 w-4" /> Mix Editor
+          </CardTitle>
+          <div className="flex shrink-0 gap-1">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={onLoadProject}
+              className="h-7 px-2 text-xs"
+            >
+              Load
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={onSaveProject}
+              className="h-7 px-2 text-xs"
+            >
+              Save
+            </Button>
+          </div>
+        </div>
+        <div className="grid grid-cols-2 gap-2">
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={onPreview}
+            disabled={clips.length === 0}
+            title="Low-quality 720p proxy render (~30s)"
+          >
+            <Eye className="h-3.5 w-3.5" /> Preview
           </Button>
-          <Button variant="outline" size="sm" onClick={onSaveProject}>
-            Save
-          </Button>
-          <Button size="sm" onClick={onRender} disabled={clips.length === 0}>
+          <Button
+            size="sm"
+            onClick={onRender}
+            disabled={clips.length === 0}
+            className="bg-gradient-to-r from-primary to-fuchsia-500 text-primary-foreground shadow-[0_0_18px_-4px_color-mix(in_oklch,var(--primary)_60%,transparent)] hover:from-primary hover:to-fuchsia-400 hover:shadow-[0_0_22px_-2px_color-mix(in_oklch,var(--primary)_70%,transparent)]"
+          >
             Render
           </Button>
         </div>
       </CardHeader>
 
-      <CardContent className="flex-1 space-y-4 overflow-y-auto">
-        <section className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+      <CardContent className="min-w-0 flex-1 space-y-4 overflow-y-auto overflow-x-hidden">
+        <section className="grid grid-cols-1 gap-3">
           <div className="space-y-1.5">
-            <Label className="text-xs uppercase text-muted-foreground">
+            <Label className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
               Target BPM
             </Label>
             <div className="flex items-center gap-2">
@@ -199,7 +231,7 @@ export function MixEditor({
           </div>
 
           <div className="space-y-1.5">
-            <Label className="text-xs uppercase text-muted-foreground">
+            <Label className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
               Crossfade: {config.crossfade_bars.toFixed(2)} bars
             </Label>
             <Slider
@@ -214,7 +246,7 @@ export function MixEditor({
           </div>
 
           <div className="space-y-1.5">
-            <Label className="text-xs uppercase text-muted-foreground">
+            <Label className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
               Loudness: {config.loudness_lufs.toFixed(1)} LUFS
             </Label>
             <Slider
@@ -247,8 +279,8 @@ export function MixEditor({
         <Separator />
 
         <div className="flex items-center justify-between">
-          <div className="text-xs uppercase text-muted-foreground">
-            Clips ({clips.length})
+          <div className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+            Clips · {clips.length}
           </div>
           <Button
             variant="ghost"
@@ -330,41 +362,70 @@ function SortableClip({
   const beatSeconds = track?.analysis
     ? 60 / track.analysis.bpm
     : null
-  const clipDurationS = beatSeconds ? beatSeconds * 4 * clip.length_bars : null
+  // Prefer the explicit end_s (from a detected drop pick) — it's exact.
+  // Fall back to bars × beat-seconds for manually-set clips.
+  const clipDurationS =
+    clip.end_s != null && clip.end_s > clip.start_s
+      ? clip.end_s - clip.start_s
+      : beatSeconds
+        ? beatSeconds * 4 * clip.length_bars
+        : null
+  const dropLabel = (() => {
+    const drops = track?.analysis?.drops ?? []
+    const match = drops.findIndex(
+      (d) => Math.abs(d.start_s - clip.start_s) < 0.5,
+    )
+    return match >= 0 ? `Drop ${match + 1}` : null
+  })()
 
   return (
     <li
       ref={setNodeRef}
       style={style}
-      className="flex items-stretch gap-2 rounded-md border border-border bg-card p-2"
+      className="flex min-w-0 items-stretch gap-2 overflow-hidden rounded-md border border-border bg-card p-2"
     >
       <button
-        className="flex cursor-grab touch-none items-center px-1 text-muted-foreground"
+        className="flex shrink-0 cursor-grab touch-none items-center px-1 text-muted-foreground"
         {...attributes}
         {...listeners}
       >
         <GripVertical className="h-4 w-4" />
       </button>
 
-      <div className="flex-1 space-y-2">
+      <div className="min-w-0 flex-1 space-y-2">
         <div className="flex items-start justify-between gap-2">
           <div className="min-w-0">
-            <div className="truncate text-sm font-medium">
-              {index + 1}. {track?.filename ?? "(missing track)"}
+            <div
+              className="truncate text-sm font-medium leading-tight"
+              title={track?.filename}
+            >
+              <span className="text-muted-foreground">{index + 1}.</span>{" "}
+              {track ? formatTrackTitle(track.filename) : "(missing track)"}
             </div>
-            <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+            <div className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
+              {dropLabel && (
+                <Badge
+                  variant="outline"
+                  className="border-amber-500/40 bg-amber-500/10 text-[10px] font-medium text-amber-300"
+                >
+                  {dropLabel}
+                </Badge>
+              )}
               {track?.analysis && (
                 <>
-                  <Badge variant="outline" className="text-[10px]">
-                    {track.analysis.bpm.toFixed(1)} BPM
+                  <Badge variant="outline" className="font-mono text-[10px] tabular-nums">
+                    {track.analysis.bpm.toFixed(0)} BPM
                   </Badge>
-                  <Badge variant="outline" className="text-[10px]">
-                    {track.analysis.key_camelot}
-                  </Badge>
+                  <KeyChip keyCamelot={track.analysis.key_camelot} />
                 </>
               )}
               {clipDurationS !== null && (
-                <span>{formatDuration(clipDurationS)}</span>
+                <span className="font-mono tabular-nums">
+                  {formatDuration(clip.start_s)}–
+                  {formatDuration(
+                    clip.end_s ?? clip.start_s + clipDurationS,
+                  )}
+                </span>
               )}
             </div>
           </div>
@@ -381,52 +442,80 @@ function SortableClip({
           </div>
         </div>
 
-        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-          <div className="space-y-1">
-            <Label className="text-[10px] uppercase text-muted-foreground">
-              Length: {clip.length_bars} bars
-            </Label>
-            <Slider
-              value={[clip.length_bars]}
-              min={4}
-              max={32}
-              step={1}
-              onValueChange={([v]) => onUpdate({ length_bars: v })}
-            />
-          </div>
-          <div className="space-y-1">
-            <Label className="text-[10px] uppercase text-muted-foreground">
-              Trim start: {clip.start_s.toFixed(2)}s
-            </Label>
-            <div className="flex gap-1">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() =>
-                  onUpdate({
-                    start_s: Math.max(
-                      0,
-                      clip.start_s - (beatSeconds ?? 0.1),
-                    ),
-                  })
-                }
-              >
-                -1 beat
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() =>
-                  onUpdate({
-                    start_s: clip.start_s + (beatSeconds ?? 0.1),
-                  })
-                }
-              >
-                +1 beat
-              </Button>
+        {(() => {
+          const step = beatSeconds ?? 0.1
+          const effectiveEnd =
+            clip.end_s != null && clip.end_s > clip.start_s
+              ? clip.end_s
+              : clip.start_s + (clipDurationS ?? 10)
+          const shiftStart = (delta: number) => {
+            const newStart = Math.max(0, clip.start_s + delta)
+            onUpdate({ start_s: newStart })
+          }
+          const shiftEnd = (delta: number) => {
+            const newEnd = Math.max(clip.start_s + 0.5, effectiveEnd + delta)
+            onUpdate({ end_s: newEnd })
+          }
+          const fmt = (s: number) => {
+            const m = Math.floor(s / 60)
+            const sec = (s - m * 60).toFixed(2).padStart(5, "0")
+            return `${m}:${sec}`
+          }
+          return (
+            <div className="grid grid-cols-2 gap-2">
+              <div className="space-y-1">
+                <Label className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                  Start · {fmt(clip.start_s)}
+                </Label>
+                <div className="flex gap-1">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-7 flex-1 px-1.5 text-[10px]"
+                    onClick={() => shiftStart(-step)}
+                    title="Move start 1 beat earlier"
+                  >
+                    -1 beat
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-7 flex-1 px-1.5 text-[10px]"
+                    onClick={() => shiftStart(step)}
+                    title="Move start 1 beat later"
+                  >
+                    +1 beat
+                  </Button>
+                </div>
+              </div>
+              <div className="space-y-1">
+                <Label className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                  End · {fmt(effectiveEnd)}
+                </Label>
+                <div className="flex gap-1">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-7 flex-1 px-1.5 text-[10px]"
+                    onClick={() => shiftEnd(-step)}
+                    title="Trim end 1 beat earlier"
+                  >
+                    -1 beat
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-7 flex-1 px-1.5 text-[10px]"
+                    onClick={() => shiftEnd(step)}
+                    title="Extend end 1 beat later"
+                  >
+                    +1 beat
+                  </Button>
+                </div>
+              </div>
             </div>
-          </div>
-        </div>
+          )
+        })()}
       </div>
     </li>
   )

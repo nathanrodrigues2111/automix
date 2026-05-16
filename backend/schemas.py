@@ -10,6 +10,12 @@ class Segment(BaseModel):
     label: str
 
 
+class Drop(BaseModel):
+    start_s: float
+    end_s: float
+    score: float = 0.0
+
+
 class Analysis(BaseModel):
     bpm: float
     key_camelot: str
@@ -19,6 +25,7 @@ class Analysis(BaseModel):
     beats: list[float]
     downbeats: list[float]
     segments: list[Segment]
+    drops: list[Drop] = []
 
 
 class Track(BaseModel):
@@ -45,20 +52,27 @@ class RenderClip(BaseModel):
     track_id: str
     start_s: float
     length_bars: float
+    # If set, render uses this exact end time and ignores length_bars + snapping.
+    end_s: float | None = None
 
 
 class RenderRequest(BaseModel):
     clips: list[RenderClip]
-    target_bpm: float
+    target_bpm: float = 0.0  # 0 = auto (mean of source BPMs)
     crossfade_bars: float = 1.0
     loudness_lufs: float = -14.0
     use_stem_crossfade: bool = True
+    use_eq_bass_swap: bool = True
+    snap_to_downbeat: bool = True
     harmonic_pitch_shift_max_semitones: float = 2.0
+    proxy: bool = False  # 720p, ultrafast preset, single-pass loudnorm, skip stems
+    hard_cut: bool = False  # cut on downbeat with no crossfade (drops-only style)
+    no_time_stretch: bool = False  # drops-only fast path: trim+concat each source, no BPM matching
 
 
 class RenderJobResponse(BaseModel):
     job_id: str
-    output_path: str
+    output_path: str | None = None  # null until render completes; final path arrives over WS
 
 
 class RenderRecord(BaseModel):
@@ -103,3 +117,5 @@ class ProgressMessage(BaseModel):
     percent: float = Field(ge=0, le=100)
     message: str = ""
     done: bool = False
+    output_path: str | None = None
+    render_id: str | None = None

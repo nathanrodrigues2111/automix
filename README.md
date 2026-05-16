@@ -10,14 +10,17 @@ Local-only web tool that scans a folder of EDM MP4s, auto-detects the first drop
 - `rubberband-cli` (used by `pyrubberband` for time-stretching)
 - Optional: NVIDIA GPU with CUDA — analysis runs ~10-20x faster than CPU
 
-Run `make check-system` to verify everything is on `PATH`.
+Run `npm run check-system` to verify everything is on `PATH`.
 
 ## Quick start
 
 ```bash
-make install   # creates backend/.venv, installs Python deps, installs frontend node_modules
-make dev       # starts FastAPI (:8000) and Vite (:5173) in parallel
+npm install            # installs root dev tools (concurrently, rimraf)
+npm run install:all    # creates backend/.venv + Python deps, installs frontend node_modules
+npm run dev            # starts FastAPI (:8000) and Vite (:5173) in parallel
 ```
+
+Other useful scripts: `npm test`, `npm run lint`, `npm run clean`. All scripts are cross-platform (Linux / macOS / Windows).
 
 Then open <http://localhost:5173>.
 
@@ -51,8 +54,8 @@ automix/
 │   │   └── api/client.ts
 │   └── package.json
 ├── videos/                 source MP4s + rendered output mashups
-├── scripts/check-system.sh
-├── Makefile
+├── scripts/                cross-platform Node helpers (install, venv runner, system check)
+├── package.json            root npm scripts (install / dev / test / lint / clean)
 ├── API_CONTRACT.md         HTTP + WebSocket contract between frontend and backend
 └── README.md
 ```
@@ -66,7 +69,7 @@ automix/
 ## Tests
 
 ```bash
-make test
+npm test
 ```
 
 Runs `pytest` against `backend/tests/test_detection.py`, which asserts the detector lands within ±0.5s of the human-labeled `golden_truth.json` for the three sample tracks, BPM within ±1, and the Camelot key matches.

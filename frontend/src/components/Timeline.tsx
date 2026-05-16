@@ -2,7 +2,7 @@ import { useEffect, useRef } from "react"
 import WaveSurfer from "wavesurfer.js"
 import RegionsPlugin, { type Region } from "wavesurfer.js/dist/plugins/regions.esm.js"
 import TimelinePlugin from "wavesurfer.js/dist/plugins/timeline.esm.js"
-import type { Track } from "@/api/types"
+import type { Drop, Track } from "@/api/types"
 import { trackVideoUrl } from "@/api/client"
 
 interface TimelineProps {
@@ -10,9 +10,11 @@ interface TimelineProps {
   dropStart: number
   dropEnd: number
   onChange: (range: { dropStart: number; dropEnd: number }) => void
-  onTimeUpdate?: (currentTime: number) => void
-  onReady?: (wavesurfer: WaveSurfer) => void
+  /** Called when the user clicks/drags on the waveform to seek (in seconds). */
+  onSeek?: (timeSec: number) => void
+  /** Time to visually display the playhead at (driven by the master video). */
   externalTime?: number
+  onReady?: (wavesurfer: WaveSurfer) => void
 }
 
 export function Timeline({
@@ -20,9 +22,9 @@ export function Timeline({
   dropStart,
   dropEnd,
   onChange,
-  onTimeUpdate,
-  onReady,
+  onSeek,
   externalTime,
+  onReady,
 }: TimelineProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const wsRef = useRef<WaveSurfer | null>(null)
@@ -37,10 +39,10 @@ export function Timeline({
 
     const regions = RegionsPlugin.create()
     const timeline = TimelinePlugin.create({
-      height: 20,
-      timeInterval: 1,
-      primaryLabelInterval: 5,
-      style: { fontSize: "10px", color: "rgba(255,255,255,0.6)" },
+      height: 18,
+      timeInterval: 10,
+      primaryLabelInterval: 30,
+      style: { fontSize: "10px", color: "rgba(255,255,255,0.5)" },
     })
 
     const ws = WaveSurfer.create({
@@ -62,6 +64,8 @@ export function Timeline({
     regionsRef.current = regions
 
     ws.on("ready", () => {
+      // Waveform is visual-only — the master <video> is the audio source.
+      ws.setVolume(0)
       const duration = ws.getDuration()
       const startEnd = Math.min(dropStart + 0.05, duration)
       const startRegion = regions.addRegion({
@@ -83,6 +87,20 @@ export function Timeline({
       startRegionRef.current = startRegion
       endRegionRef.current = endRegion
 
+      // Each detected drop gets its own non-draggable highlight band.
+      const drops = track.analysis?.drops ?? []
+      drops.forEach((d: Drop, i: number) => {
+        regions.addRegion({
+          id: `drop_${i}`,
+          start: d.start_s,
+          end: Math.min(duration, d.end_s),
+          color: "rgba(251, 191, 36, 0.18)", // amber/yellow tint
+          drag: false,
+          resize: false,
+          content: `D${i + 1}`,
+        })
+      })
+
       drawBeatGrid(ws, track)
 
       onReady?.(ws)
@@ -90,9 +108,12 @@ export function Timeline({
 
     const subs: Array<() => void> = []
 
+    // User clicks/drags the waveform → seek the video (the master clock).
+    // Only listen to `interaction` (user-initiated). `seeking` also fires on
+    // programmatic seekTo, which would create a feedback loop with externalTime.
     subs.push(
-      ws.on("timeupdate", (t) => {
-        onTimeUpdate?.(t)
+      ws.on("interaction", (newTime) => {
+        onSeek?.(newTime)
       }),
     )
 
@@ -176,9 +197,8 @@ function drawBeatGrid(ws: WaveSurfer, track: Track) {
   overlay.innerHTML = ""
 
   const fragment = document.createDocumentFragment()
-  const downbeats = new Set(track.analysis.downbeats)
-  track.analysis.beats.forEach((t) => {
-    const isDownbeat = downbeats.has(t)
+  // Only render downbeats — every-beat ticks are too dense across a full track.
+  track.analysis.downbeats.forEach((t) => {
     const tick = document.createElement("div")
     Object.assign(tick.style, {
       position: "absolute",
@@ -186,9 +206,7 @@ function drawBeatGrid(ws: WaveSurfer, track: Track) {
       bottom: "0",
       width: "1px",
       left: `${(t / duration) * 100}%`,
-      background: isDownbeat
-        ? "rgba(250, 204, 21, 0.55)"
-        : "rgba(255,255,255,0.12)",
+      background: "rgba(250, 204, 21, 0.35)",
     })
     fragment.appendChild(tick)
   })

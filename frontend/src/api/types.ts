@@ -4,6 +4,12 @@ export interface Segment {
   label: string
 }
 
+export interface Drop {
+  start_s: number
+  end_s: number
+  score: number
+}
+
 export interface TrackAnalysis {
   bpm: number
   key_camelot: string
@@ -13,6 +19,7 @@ export interface TrackAnalysis {
   beats: number[]
   downbeats: number[]
   segments: Segment[]
+  drops?: Drop[]
 }
 
 export interface Track {
@@ -48,6 +55,7 @@ export interface RenderClip {
   track_id: string
   start_s: number
   length_bars: number
+  end_s?: number | null
 }
 
 export interface RenderConfig {
@@ -56,12 +64,17 @@ export interface RenderConfig {
   crossfade_bars: number
   loudness_lufs: number
   use_stem_crossfade: boolean
+  use_eq_bass_swap?: boolean
+  snap_to_downbeat?: boolean
+  hard_cut?: boolean
+  no_time_stretch?: boolean
   harmonic_pitch_shift_max_semitones: number
+  proxy?: boolean
 }
 
 export interface RenderResponse {
   job_id: string
-  output_path: string
+  output_path: string | null
 }
 
 export interface RenderRecord {
@@ -105,4 +118,6 @@ export interface ProgressMessage {
   percent: number
   message: string
   done: boolean
+  output_path?: string | null
+  render_id?: string | null
 }

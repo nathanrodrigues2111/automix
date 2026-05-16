@@ -6,6 +6,8 @@ export interface ProgressEntry {
   percent: number
   message: string
   done: boolean
+  output_path?: string | null
+  render_id?: string | null
 }
 
 export type ProgressMap = Record<string, ProgressEntry>
@@ -40,6 +42,8 @@ export function useProgressSocket(): ProgressMap {
               percent: msg.percent,
               message: msg.message,
               done: msg.done,
+              output_path: msg.output_path ?? prev[msg.job_id]?.output_path ?? null,
+              render_id: msg.render_id ?? prev[msg.job_id]?.render_id ?? null,
             },
           }))
         } catch {

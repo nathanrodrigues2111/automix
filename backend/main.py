@@ -12,11 +12,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import analysis as analysis_mod
-from . import db
-from . import models_setup
-from . import render as render_mod
-from . import schemas
+import analysis as analysis_mod
+import db
+import models_setup
+import render as render_mod
+import schemas
 
 app = FastAPI(title="Automix Backend")
 
@@ -111,6 +111,10 @@ def _scan_tracks() -> list[dict]:
         return []
     tracks: list[dict] = []
     for path in sorted(VIDEOS_DIR.rglob("*.mp4")):
+        # Skip our own render outputs — they live in the same dir but are
+        # mixes, not source tracks.
+        if path.name.startswith("automix_"):
+            continue
         try:
             basic = analysis_mod.probe_basic(path)
         except Exception:
@@ -118,6 +122,21 @@ def _scan_tracks() -> list[dict]:
         fh = analysis_mod.file_hash(path)
         tid = fh[:16]
         cached = db.get_analysis(fh)
+        # Backfill: older analyses don't have `drops`. Compute lazily from the
+        # cached WAV (fast — ~1-2s per track on first scan) and persist.
+        if cached is not None and not cached.get("drops"):
+            wav = analysis_mod.WAV_CACHE_DIR / f"{fh}.wav"
+            if wav.exists():
+                try:
+                    drops = analysis_mod.find_drops(
+                        wav,
+                        [float(d) for d in cached.get("downbeats", [])],
+                        float(cached.get("bpm", 0.0)),
+                    )
+                    cached["drops"] = drops
+                    db.put_analysis(fh, cached)
+                except Exception:
+                    cached["drops"] = []
         rel = str(path.relative_to(PROJECT_ROOT))
         tracks.append(
             {
@@ -262,14 +281,23 @@ async def post_render(req: schemas.RenderRequest) -> dict:
     progress = make_progress(job_id)
     config = req.model_dump()
 
-    expected_ts = "pending"
-    expected_path = f"videos/automix_<ts>.mp4"
-
     async def _run():
         try:
             progress("render", 1.0, "Starting render")
-            await asyncio.to_thread(
+            record = await asyncio.to_thread(
                 render_mod.render_mix, config, _resolve_track_path, progress
+            )
+            # Final message with the real output path so the UI can play/download it.
+            hub.publish_sync(
+                {
+                    "job_id": job_id,
+                    "stage": "render",
+                    "percent": 100.0,
+                    "message": "Done",
+                    "done": True,
+                    "output_path": record["output_path"],
+                    "render_id": record["id"],
+                }
             )
         except Exception as e:
             hub.publish_sync(
@@ -283,7 +311,9 @@ async def post_render(req: schemas.RenderRequest) -> dict:
             )
 
     asyncio.create_task(_run())
-    return {"job_id": job_id, "output_path": expected_path}
+    # output_path is unknown until render finishes; UI must read it from the
+    # final WS progress message (which carries `output_path`).
+    return {"job_id": job_id, "output_path": None}
 
 
 @app.get("/api/renders")

@@ -153,6 +153,84 @@ def _snap_to_downbeat(t: float, downbeats: list[float]) -> float:
     return min(downbeats, key=lambda d: abs(d - t))
 
 
+def find_drops(
+    wav_path: Path,
+    downbeats: list[float],
+    bpm: float,
+    max_drops: int = 5,
+    min_separation_s: float = 30.0,
+) -> list[dict[str, Any]]:
+    """Detect EDM drop *moments* — the points where energy jumps from a
+    quiet section (buildup/breakdown) into a loud section (the main drop).
+
+    Returns list of {start_s, end_s, score} where start_s = drop_moment − 5s
+    (captures the buildup), all snapped to downbeats.
+    """
+    import librosa
+    from scipy.signal import find_peaks
+
+    y, sr = librosa.load(str(wav_path), sr=22050, mono=True)
+    duration = len(y) / sr
+    if y.size == 0:
+        return []
+
+    hop = 512
+    rms = librosa.feature.rms(y=y, hop_length=hop)[0]
+    if rms.size == 0:
+        return []
+
+    # Drop score = mean energy in the next 2s minus mean energy in the prior
+    # 4s. A drop is "quiet then suddenly loud," which spikes this delta. This
+    # avoids the previous bug where we found the *middle* of sustained loud
+    # sections instead of where the bass kicks in.
+    win_after = max(1, int(2.0 * sr / hop))
+    win_before = max(1, int(4.0 * sr / hop))
+    score = np.zeros_like(rms)
+    for i in range(win_before, len(rms) - win_after):
+        before = float(np.mean(rms[i - win_before : i]))
+        after = float(np.mean(rms[i : i + win_after]))
+        score[i] = after - before
+
+    if np.max(score) <= 0:
+        return []
+
+    height = float(np.max(score) * 0.45)
+    distance = max(1, int(min_separation_s * sr / hop))
+    peaks, props = find_peaks(score, height=height, distance=distance)
+    if len(peaks) == 0:
+        return []
+
+    heights = props["peak_heights"]
+    order = np.argsort(-heights)[:max_drops]
+
+    # 5s of buildup before the kick + 15s of the main drop = 20s clip.
+    prelude_s = 5.0
+    default_len_s = 20.0
+
+    drops: list[dict[str, Any]] = []
+    for idx in order:
+        drop_t = float(librosa.frames_to_time(peaks[idx], sr=sr, hop_length=hop))
+        # Skip false positives in the first ~15s (intro hits, not real drops).
+        if drop_t < 15.0:
+            continue
+        desired_start = max(0.0, drop_t - prelude_s)
+        start = _snap_to_downbeat(desired_start, downbeats) if downbeats else desired_start
+        # Length stays exactly 10s — don't snap the end, that drifts the duration.
+        end = min(start + default_len_s, duration)
+        if end <= start:
+            continue
+        drops.append(
+            {
+                "start_s": float(start),
+                "end_s": float(end),
+                "score": float(heights[idx]),
+            }
+        )
+
+    drops.sort(key=lambda d: d["start_s"])
+    return drops
+
+
 def _run_allin1(wav_path: Path, progress: ProgressCb = None) -> dict[str, Any]:
     """Run allin1.analyze. Returns dict with bpm, beats, downbeats, segments."""
     if progress:
@@ -309,6 +387,10 @@ def analyze_track(video_path: Path, progress: ProgressCb = None) -> dict[str, An
         progress("analysis", 95.0, "Measuring loudness")
     lufs = measure_lufs(wav_path)
 
+    if progress:
+        progress("analysis", 98.0, "Finding drop candidates")
+    drops = find_drops(wav_path, downbeats, bpm)
+
     return {
         "bpm": bpm,
         "key_camelot": key_camelot,
@@ -318,4 +400,5 @@ def analyze_track(video_path: Path, progress: ProgressCb = None) -> dict[str, An
         "beats": beats,
         "downbeats": downbeats,
         "segments": segments,
+        "drops": drops,
     }

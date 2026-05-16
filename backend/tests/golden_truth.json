@@ -1,0 +1,29 @@
+{
+  "tracks": [
+    {
+      "filename": "FLEMMING & Hardwell - Zonder Jou (Official Video) [CcthOWK4kMA].mp4",
+      "track_id": "91984ca0155efabb",
+      "bpm": 129.2,
+      "key_camelot": "6A",
+      "drop_start_s": 43.71,
+      "confidence": "high"
+    },
+    {
+      "filename": "Hardwell, Azteck & Dr Phunk - LOW (Official Lyric Video) [TGzLdVhsZsc].mp4",
+      "track_id": "4871309e59d9620e",
+      "bpm": 152.0,
+      "key_camelot": "2A",
+      "drop_start_s": 32.10,
+      "confidence": "high"
+    },
+    {
+      "filename": "Hardwell, Vini Vici, MR.BLACK & Liquid Soul  - Crazy People 2026 [mvXDt_j9SU8].mp4",
+      "track_id": "4eeba37ce0c7df78",
+      "bpm": 143.55,
+      "key_camelot": "5A",
+      "drop_start_s": 43.14,
+      "confidence": "medium"
+    }
+  ],
+  "_comment": "Independently labeled by signal analysis on the sub-bass band (30-120 Hz) — NOT seeded from the backend detector. See /home/lazyneil/Local Sites/dev/automix/ground_truth.json for the detailed labeling method per track. Tolerances enforced by test_detection.py: drop_start ±0.5s, bpm ±1.0, key exact Camelot match."
+}

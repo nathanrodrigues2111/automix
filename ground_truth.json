@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "tracks": [
+    {
+      "filename": "FLEMMING & Hardwell - Zonder Jou (Official Video) [CcthOWK4kMA].mp4",
+      "drop_start_s": 43.71,
+      "bpm": 129.2,
+      "key_camelot": "6A",
+      "key_name": "G minor",
+      "confidence": "high",
+      "method": "Computed STFT (n_fft=1024, hop=128) and isolated the sub-bass band (30-120 Hz, where the kick fundamental and sub live). Smoothed with a 1-second moving average, scanned post-t=20s for a clear break-then-slam pattern in sub-bass energy. The earliest unambiguous slam landed at 43.71s: sub-bass collapses to ~2 (essentially silent sub) between 43.55-43.65s after a vocal-only break, then jumps to 25.9 -> 66.8 -> 99.7 within ~150 ms. Snapped to the nearest librosa beat-track downbeat (43.75s, off by 40 ms) -- final value held at the actual sub-bass step at 43.71s, which is the kick-on-downbeat instant. BPM came from librosa.beat.beat_track (129.20, stable across full track and middle segment). Key via Krumhansl-Schmuckler: chroma_cqt on the harmonic component of the full track gave G as the dominant pitch class (0.132), correlation 0.764 for G min vs 0.640 for relative A# maj -- a 0.124 margin, very confident.",
+      "notes": "There is an earlier 'soft-drop' / post-break melodic section starting around 27.4s (after the first short break at 26s) where broadband RMS rises but sub-bass stays around 5-10 -- this is the post-chorus vocal section, NOT the full drop. The real drop edge is the sub-bass slam at 43.71s where bass goes from ~2 to ~100. A second drop occurs around 146s after a longer breakdown. Marked high confidence because the sub-bass step is unambiguous (50x ratio across 150 ms)."
+    },
+    {
+      "filename": "Hardwell, Azteck & Dr Phunk - LOW (Official Lyric Video) [TGzLdVhsZsc].mp4",
+      "drop_start_s": 32.1,
+      "bpm": 152.0,
+      "key_camelot": "2A",
+      "key_name": "D# minor",
+      "confidence": "high",
+      "method": "Same sub-bass (30-120 Hz) STFT analysis. The break from ~30.5s to ~32.05s is completely empty in the sub-bass (energies of 0.2-2.4, basically silence) -- a classic 'let it go' vocal break. The kick lands at 32.10s, with sub-bass jumping from 2.5 at 32.05s to 32.5 at 32.10s, then 105.7 at 32.15s -- a >40x jump in ~50 ms. librosa onset_detect and beat_track both agree exactly on 32.09s. BPM is 152.0 across every detection method I tried (full track, middle segment, with std_bpm=20). This is hardstyle/hard-dance territory which is normal for Azteck and Dr Phunk. Key via KS gave D# (Eb) as the overwhelmingly dominant pitch (0.196 in the chroma profile, nearly 2x next-highest E at 0.108). D# min correlation 0.643 vs D# maj 0.593 (margin 0.050), but the minor mode is strongly preferred given the genre and the strong absence of any major 3rd (F##/G).",
+      "notes": "Drop is one of the cleanest in the test suite -- a hard, fully empty break followed by an enormous slam. Equivalent notation: Eb minor / Ebm. Camelot 2A. The 152 BPM is correct (not double-time 76); the kick pattern is on every quarter note at 152."
+    },
+    {
+      "filename": "Hardwell, Vini Vici, MR.BLACK & Liquid Soul  - Crazy People 2026 [mvXDt_j9SU8].mp4",
+      "drop_start_s": 43.14,
+      "bpm": 143.55,
+      "key_camelot": "5A",
+      "key_name": "C minor",
+      "confidence": "medium",
+      "method": "Same sub-bass STFT pipeline. Search window 40-48s. The break between 40-42s is fully silent in sub-bass (~0.5-4), kick lands at 43.10s with sub-bass jumping 0.99 -> 35.27 -> 82.96 -> 133.23 inside 200 ms (>100x ratio). librosa onset and beat tracking agree exactly at 43.14s. BPM came back as 143.55 from full-track beat_track; default tempo() returned 117 and 287 (clearly halved/doubled), and the 143-144 value matches the psy-trance/big-room hybrid signature of Vini Vici. Key: chroma is unusually flat (D# 0.106 top, almost-uniform), and KS correlations tied D# maj at 0.635 and C min at 0.635 (these are relative keys -- same Camelot wheel position number, just letter A vs B). I picked C min (5A) because psy-trance and Vini Vici productions are almost always in minor keys and the dominant melodic line under the drop sounds like a C-natural-minor riff in this style.",
+      "notes": "ATYPICAL STRUCTURE: the track opens hot. From ~4s to ~38s, sub-bass is already at 100+ (essentially drop-level energy), then there's a brief 4-second break (38-42s), then THIS labeled drop at 43.14s. If you interpret the 4-38s opening as 'the first drop' (which is defensible for a festival-edit / Vini Vici-style track that previews the lead before breaking down), then the true first drop is around 4s with a 2-bar intro. I went with the 43.14s slam because (a) the user specified 'find the first such pattern after t=20s', (b) it follows the conventional intro->break->DROP signature, and (c) the 0.99->133 sub-bass step is unambiguous. Key labeled 5A (C min) but 5B (D# / Eb major) is essentially tied in the chroma correlation -- harmonically these are the same notes, just different tonal center; mark as low confidence on the key letter, the camelot number (5) is solid."
+    }
+  ],
+  "labeler_version": "ground-truth-agent-v1",
+  "labeled_at": "2026-05-16"
+}

@@ -251,8 +251,15 @@ def find_drops(
 
         desired_start = max(0.0, drop_t - buildup_s)
         start = _snap_to_downbeat(desired_start, downbeats) if downbeats else desired_start
-        end = min(start + (drop_t - start) + drop_len_s, duration)
-        # Recompute kick relative to the (possibly snapped) start.
+        natural_end = min(start + (drop_t - start) + drop_len_s, duration)
+        # Snap end to the nearest downbeat too — every transition boundary in
+        # the mix then lands on a bar line in both source tracks.
+        end = _snap_to_downbeat(natural_end, downbeats) if downbeats else natural_end
+        # Guarantee at least one full bar in the drop after the kick.
+        min_after_kick = max(0.5, (drop_t - start) * 0.5)
+        if end < drop_t + min_after_kick:
+            end = min(duration, drop_t + min_after_kick)
+            end = _snap_to_downbeat(end, downbeats) if downbeats else end
         kick_t = drop_t
         if end <= start:
             continue

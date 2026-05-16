@@ -22,6 +22,8 @@ interface TrackListProps {
   playingKey?: string | null
   /** Set of "trackId:startS" keys for drops already in the mix. */
   addedKeys?: Set<string>
+  /** BPM of the last clip in the mix — used to highlight compatible tracks. */
+  referenceBpm?: number | null
 }
 
 export function TrackList({
@@ -33,6 +35,7 @@ export function TrackList({
   onPausePreview,
   playingKey,
   addedKeys,
+  referenceBpm,
 }: TrackListProps) {
   const tracks = useTracks()
   const analyze = useAnalyze()
@@ -111,17 +114,49 @@ export function TrackList({
                 </div>
               </button>
 
-              {t.analysis && (
-                <div className="flex flex-wrap items-center gap-1">
-                  <Badge variant="secondary" className="font-mono text-[10px] tabular-nums">
-                    {t.analysis.bpm.toFixed(0)}
-                  </Badge>
-                  <KeyChip keyCamelot={t.analysis.key_camelot} />
-                  <Badge variant="outline" className="text-[10px] tabular-nums text-muted-foreground">
-                    {t.analysis.lufs.toFixed(1)} LU
-                  </Badge>
-                </div>
-              )}
+              {t.analysis && (() => {
+                const bpm = t.analysis.bpm
+                const bpmDiff = referenceBpm
+                  ? Math.abs(referenceBpm - bpm) / referenceBpm
+                  : 0
+                const bpmCompat = !referenceBpm
+                  ? "neutral"
+                  : bpmDiff <= 0.05
+                    ? "good"
+                    : bpmDiff <= 0.1
+                      ? "warn"
+                      : "bad"
+                return (
+                  <div className="flex flex-wrap items-center gap-1">
+                    <Badge
+                      variant="secondary"
+                      className={cn(
+                        "font-mono text-[10px] tabular-nums",
+                        bpmCompat === "good" &&
+                          "bg-emerald-500/20 text-emerald-300 ring-1 ring-emerald-500/40",
+                        bpmCompat === "warn" &&
+                          "bg-amber-500/20 text-amber-300 ring-1 ring-amber-500/40",
+                        bpmCompat === "bad" &&
+                          "bg-rose-500/20 text-rose-300 ring-1 ring-rose-500/40",
+                      )}
+                      title={
+                        referenceBpm
+                          ? `Last clip: ${referenceBpm.toFixed(0)} BPM (${(bpmDiff * 100).toFixed(0)}% off)`
+                          : `${bpm.toFixed(1)} BPM`
+                      }
+                    >
+                      {bpm.toFixed(0)}
+                    </Badge>
+                    <KeyChip keyCamelot={t.analysis.key_camelot} />
+                    <Badge
+                      variant="outline"
+                      className="text-[10px] tabular-nums text-muted-foreground"
+                    >
+                      {t.analysis.lufs.toFixed(1)} LU
+                    </Badge>
+                  </div>
+                )
+              })()}
 
               {isAnalyzing && (
                 <div className="space-y-1">

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react"
+import { toast } from "sonner"
 import { Disc3, ListMusic, MousePointerClick, Sliders, Waves } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Separator } from "@/components/ui/separator"
@@ -79,6 +80,11 @@ export default function App() {
     () => new Set(clips.map((c) => `${c.track_id}:${c.start_s.toFixed(2)}`)),
     [clips],
   )
+  const lastClipBpm = useMemo(() => {
+    const last = clips[clips.length - 1]
+    if (!last) return null
+    return trackById[last.track_id]?.analysis?.bpm ?? null
+  }, [clips, trackById])
   const selectedTrack = selectedTrackId ? trackById[selectedTrackId] : null
 
   useEffect(() => {
@@ -117,6 +123,24 @@ export default function App() {
       drop && drop.end_s > drop.start_s
         ? Math.max(4, Math.round((drop.end_s - drop.start_s) / (beatSec * 4)))
         : 16
+
+    // BPM-mismatch warning: if the previous clip's BPM is >5% off, transitions
+    // won't beat-align in no-time-stretch mode.
+    const prev = clips[clips.length - 1]
+    const prevBpm = prev ? trackById[prev.track_id]?.analysis?.bpm : undefined
+    if (prevBpm && t.analysis.bpm) {
+      const diff = Math.abs(prevBpm - t.analysis.bpm) / prevBpm
+      if (diff > 0.05) {
+        toast.warning(
+          `BPM mismatch: ${prevBpm.toFixed(0)} → ${t.analysis.bpm.toFixed(0)} (${(diff * 100).toFixed(0)}% off)`,
+          {
+            description:
+              "Transition may drift — same-BPM picks will sound tighter.",
+          },
+        )
+      }
+    }
+
     setClips((prev) => [
       ...prev,
       {
@@ -222,6 +246,7 @@ export default function App() {
               onPausePreview={handlePausePreview}
               playingKey={videoIsPlaying ? previewingKey : null}
               addedKeys={addedKeys}
+              referenceBpm={lastClipBpm}
             />
           </div>
         </aside>

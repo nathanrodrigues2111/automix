@@ -7,6 +7,7 @@ export interface Segment {
 export interface Drop {
   start_s: number
   end_s: number
+  kick_s?: number
   score: number
 }
 
@@ -56,6 +57,7 @@ export interface RenderClip {
   start_s: number
   length_bars: number
   end_s?: number | null
+  kick_s?: number | null
 }
 
 export interface RenderConfig {

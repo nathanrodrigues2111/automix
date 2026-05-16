@@ -79,19 +79,19 @@ def _pitch_shift_wav(in_wav: Path, out_wav: Path, semitones: float) -> None:
     sf.write(str(out_wav), out, sr)
 
 
-def _x264_args(proxy: bool) -> list[str]:
-    # Force a consistent resolution AND framerate across every clip — sources
-    # with mixed dimensions (1080p + 4K) or framerates (25 fps + 23.976) make
-    # the concat demuxer emit junk timestamps and double the output duration.
+def _x264_encode_args(proxy: bool) -> list[str]:
+    """Encoder settings only — for use after a -filter_complex chain or any
+    case where the video has already been normalized."""
     if proxy:
-        return [
-            "-vf", "scale=-2:720",
-            "-c:v", "libx264", "-crf", "28", "-preset", "ultrafast",
-        ]
-    return [
-        "-vf", "scale=-2:1080",
-        "-c:v", "libx264", "-crf", "18", "-preset", "medium",
-    ]
+        return ["-c:v", "libx264", "-crf", "28", "-preset", "ultrafast"]
+    return ["-c:v", "libx264", "-crf", "18", "-preset", "medium"]
+
+
+def _x264_args(proxy: bool) -> list[str]:
+    """Full args: scale to a consistent resolution + encode. Used by trim/concat
+    to ensure clips have identical dimensions before downstream filters."""
+    scale = "scale=-2:720" if proxy else "scale=-2:1080"
+    return ["-vf", scale, *_x264_encode_args(proxy)]
 
 
 def _trim_video_clip(src: Path, start_s: float, duration_s: float, out: Path, proxy: bool = False) -> None:
@@ -353,6 +353,67 @@ def _mux_video_audio(video_path: Path, audio_wav: Path, out_path: Path) -> None:
     subprocess.run(cmd, check=True, capture_output=True)
 
 
+def _xfade_videos(
+    parts: list[Path],
+    crossfades_s: list[float],
+    out_path: Path,
+    proxy: bool = False,
+) -> None:
+    """Concat parts with per-boundary video crossfades. crossfades_s has one
+    fewer element than parts (one per transition)."""
+    if not parts:
+        raise ValueError("no parts")
+    if len(parts) == 1:
+        shutil.copy(parts[0], out_path)
+        return
+    if len(crossfades_s) != len(parts) - 1:
+        raise ValueError("crossfades count must be len(parts) - 1")
+
+    durations: list[float] = []
+    for p in parts:
+        r = subprocess.run(
+            [
+                "ffprobe", "-v", "error",
+                "-show_entries", "format=duration",
+                "-of", "default=noprint_wrappers=1:nokey=1",
+                str(p),
+            ],
+            capture_output=True, text=True, check=True,
+        )
+        durations.append(float(r.stdout.strip()))
+
+    inputs: list[str] = []
+    for p in parts:
+        inputs.extend(["-i", str(p)])
+
+    filter_parts: list[str] = []
+    cumulative = durations[0]
+    prev_label = "0:v"
+    for i in range(1, len(parts)):
+        cf = max(0.05, crossfades_s[i - 1])
+        offset = max(0.0, cumulative - cf)
+        next_label = f"v{i}"
+        filter_parts.append(
+            f"[{prev_label}][{i}:v]xfade=transition=fade:duration={cf:.3f}:offset={offset:.3f}[{next_label}]"
+        )
+        cumulative = cumulative + durations[i] - cf
+        prev_label = next_label
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    cmd = [
+        "ffmpeg", "-y",
+        *inputs,
+        "-filter_complex", ";".join(filter_parts),
+        "-map", f"[{prev_label}]",
+        "-an",
+        *_x264_encode_args(proxy),
+        "-pix_fmt", "yuv420p",
+        "-movflags", "+faststart",
+        str(out_path),
+    ]
+    subprocess.run(cmd, check=True, capture_output=True)
+
+
 def _concat_videos(parts: list[Path], out_path: Path, proxy: bool = False) -> None:
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as f:
@@ -533,7 +594,16 @@ def render_mix(
     # Build final audio with crossfades between consecutive clips.
     if progress:
         progress("render", 70.0, "Mixing audio with crossfades")
-    crossfade_s = _bars_to_seconds(crossfade_bars, target_bpm)
+    default_crossfade_s = _bars_to_seconds(crossfade_bars, target_bpm)
+
+    def _crossfade_for(b_clip: dict) -> float:
+        # When the incoming clip has a known kick_s, overlap the crossfade with
+        # its buildup so A's drop ends exactly when B's drop kicks in.
+        kick = b_clip.get("kick_s")
+        start = b_clip.get("start_s")
+        if kick is not None and start is not None and float(kick) > float(start):
+            return float(kick) - float(start)
+        return default_crossfade_s
 
     # IMPORTANT: stem-aware crossfade functions take *full clean clips* on both
     # sides — they can't accept the running merged audio (which is already
@@ -542,35 +612,41 @@ def render_mix(
     # current_audio. Before this fix, the stem-aware branches were dropping
     # everything earlier than clip[i-1] from the mix.
     current_audio = clip_audios[0]
+    crossfade_durations: list[float] = []
     for i in range(1, n_clips):
         merged = work / f"merged_{i:02d}.wav"
         a_stems = clip_stems[i - 1]
         b_stems = clip_stems[i]
+        cf_s = _crossfade_for(clips[i])
+        crossfade_durations.append(cf_s)
         can_use_stems = i == 1 and a_stems and b_stems
         if can_use_stems and use_eq_swap:
             try:
-                _eq_bass_swap_crossfade(a_stems, b_stems, crossfade_s, merged)
+                _eq_bass_swap_crossfade(a_stems, b_stems, cf_s, merged)
             except Exception:
-                _equal_power_crossfade(current_audio, clip_audios[i], crossfade_s, merged)
+                _equal_power_crossfade(current_audio, clip_audios[i], cf_s, merged)
         elif can_use_stems and use_stem_cf:
             try:
-                _stem_aware_crossfade(a_stems, b_stems, crossfade_s, merged)
+                _stem_aware_crossfade(a_stems, b_stems, cf_s, merged)
             except Exception:
-                _equal_power_crossfade(current_audio, clip_audios[i], crossfade_s, merged)
+                _equal_power_crossfade(current_audio, clip_audios[i], cf_s, merged)
         else:
-            _equal_power_crossfade(current_audio, clip_audios[i], crossfade_s, merged)
+            _equal_power_crossfade(current_audio, clip_audios[i], cf_s, merged)
         current_audio = merged
 
     final_audio = current_audio
 
-    # Build final video by concatenating clip videos.
+    # Build final video — crossfade between clips so video duration matches
+    # the audio mix (the audio side overlaps by `crossfade_durations[i]` per
+    # transition; the video must do the same or `-shortest` mux will cut off
+    # the last clip).
     if progress:
-        progress("render", 85.0, "Concatenating video")
+        progress("render", 85.0, "Crossfading video")
     concat_video = work / "video_concat.mp4"
     if len(clip_videos) == 1:
         shutil.copy(clip_videos[0], concat_video)
     else:
-        _concat_videos(clip_videos, concat_video, proxy=proxy)
+        _xfade_videos(clip_videos, crossfade_durations, concat_video, proxy=proxy)
 
     if progress:
         progress("render", 93.0, "Muxing video and audio")

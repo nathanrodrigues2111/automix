@@ -111,8 +111,7 @@ export default function App() {
     if (!t.analysis) return
     const start_s = drop?.start_s ?? t.analysis.drop_start_s
     const end_s = drop?.end_s
-    // length_bars is the fallback when no explicit end is supplied; in concat
-    // mode the render honours end_s exactly when present.
+    const kick_s = drop?.kick_s
     const beatSec = 60 / (t.analysis.bpm || 128)
     const length_bars =
       drop && drop.end_s > drop.start_s
@@ -126,6 +125,7 @@ export default function App() {
         start_s,
         length_bars,
         end_s,
+        kick_s,
       },
     ])
   }

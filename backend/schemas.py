@@ -13,6 +13,7 @@ class Segment(BaseModel):
 class Drop(BaseModel):
     start_s: float
     end_s: float
+    kick_s: float | None = None  # time of the actual drop kick (used to align crossfades)
     score: float = 0.0
 
 
@@ -54,6 +55,9 @@ class RenderClip(BaseModel):
     length_bars: float
     # If set, render uses this exact end time and ignores length_bars + snapping.
     end_s: float | None = None
+    # Drop kick time in source coordinates — used to compute the buildup length
+    # so the incoming clip's drop hits exactly when the outgoing clip's drop ends.
+    kick_s: float | None = None
 
 
 class RenderRequest(BaseModel):

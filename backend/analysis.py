@@ -203,26 +203,64 @@ def find_drops(
     heights = props["peak_heights"]
     order = np.argsort(-heights)[:max_drops]
 
-    # 5s of buildup before the kick + 15s of the main drop = 20s clip.
-    prelude_s = 5.0
-    default_len_s = 20.0
+    # Per-drop analysis: scan FORWARD from the peak to find the natural drop
+    # end (where energy falls back to baseline), and scan BACKWARD to find the
+    # natural buildup start (lowest energy in the lookback window). Clamped to
+    # sensible ranges so a fluke doesn't produce a 1-second clip or a 60-second
+    # one.
+    min_buildup_s = 2.0
+    max_buildup_s = 6.0
+    min_drop_len_s = 8.0
+    max_drop_len_s = 15.0
+
+    # Smoothed RMS for measuring sustained drop energy (~0.5s window).
+    rms_smooth_win = max(1, int(0.5 * sr / hop))
+    rms_smooth = np.convolve(rms, np.ones(rms_smooth_win) / rms_smooth_win, mode="same")
+
+    def _scan_drop_end(peak_idx: int) -> float:
+        peak_rms = float(rms_smooth[peak_idx])
+        threshold = peak_rms * 0.55
+        guard_frames = int(2.0 * sr / hop)
+        for j in range(peak_idx + guard_frames, len(rms_smooth)):
+            if rms_smooth[j] < threshold:
+                return float(librosa.frames_to_time(j, sr=sr, hop_length=hop))
+        return duration
+
+    def _scan_buildup_start(peak_idx: int) -> float:
+        # Look back at most `max_buildup_s` worth of frames; pick the minimum
+        # energy point — that's where the buildup energy started rising.
+        look_back = int(max_buildup_s * sr / hop)
+        start_idx = max(0, peak_idx - look_back)
+        if start_idx >= peak_idx:
+            return float(librosa.frames_to_time(peak_idx, sr=sr, hop_length=hop))
+        segment = rms_smooth[start_idx:peak_idx]
+        min_offset = int(np.argmin(segment))
+        return float(librosa.frames_to_time(start_idx + min_offset, sr=sr, hop_length=hop))
 
     drops: list[dict[str, Any]] = []
     for idx in order:
-        drop_t = float(librosa.frames_to_time(peaks[idx], sr=sr, hop_length=hop))
-        # Skip false positives in the first ~15s (intro hits, not real drops).
+        peak_idx = int(peaks[idx])
+        drop_t = float(librosa.frames_to_time(peak_idx, sr=sr, hop_length=hop))
         if drop_t < 15.0:
             continue
-        desired_start = max(0.0, drop_t - prelude_s)
+        natural_end = _scan_drop_end(peak_idx)
+        drop_len_s = max(min_drop_len_s, min(max_drop_len_s, natural_end - drop_t))
+
+        buildup_start_t = _scan_buildup_start(peak_idx)
+        buildup_s = max(min_buildup_s, min(max_buildup_s, drop_t - buildup_start_t))
+
+        desired_start = max(0.0, drop_t - buildup_s)
         start = _snap_to_downbeat(desired_start, downbeats) if downbeats else desired_start
-        # Length stays exactly 10s — don't snap the end, that drifts the duration.
-        end = min(start + default_len_s, duration)
+        end = min(start + (drop_t - start) + drop_len_s, duration)
+        # Recompute kick relative to the (possibly snapped) start.
+        kick_t = drop_t
         if end <= start:
             continue
         drops.append(
             {
                 "start_s": float(start),
                 "end_s": float(end),
+                "kick_s": float(kick_t),
                 "score": float(heights[idx]),
             }
         )

@@ -208,10 +208,12 @@ def find_drops(
     # natural buildup start (lowest energy in the lookback window). Clamped to
     # sensible ranges so a fluke doesn't produce a 1-second clip or a 60-second
     # one.
+    # Tuned against the reference EDMPAPA mix (014oXybzUkc): kicks land every
+    # ~19s, buildups run 4-7s, drop bodies sustain 4-9s. Clip = buildup + body.
     min_buildup_s = 2.0
-    max_buildup_s = 6.0
-    min_drop_len_s = 8.0
-    max_drop_len_s = 15.0
+    max_buildup_s = 8.0
+    min_drop_len_s = 4.0
+    max_drop_len_s = 10.0
 
     # Smoothed RMS for measuring sustained drop energy (~0.5s window).
     rms_smooth_win = max(1, int(0.5 * sr / hop))
@@ -312,6 +314,10 @@ def _fallback_structure(wav_path: Path) -> dict[str, Any]:
     y, sr = librosa.load(str(wav_path), sr=22050, mono=True)
     tempo, beat_frames = librosa.beat.beat_track(y=y, sr=sr)
     bpm = float(np.atleast_1d(tempo)[0])
+    # librosa often locks onto half tempo for four-on-the-floor EDM (e.g. 63
+    # instead of 126). Real EDM sits ~85-180 BPM; fold octave errors back in.
+    while 0 < bpm < 85:
+        bpm *= 2
     beat_times = librosa.frames_to_time(beat_frames, sr=sr)
     beats = [float(b) for b in beat_times]
     downbeats = beats[::4] if beats else []

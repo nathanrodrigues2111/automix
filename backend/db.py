@@ -22,8 +22,21 @@ def _conn() -> sqlite3.Connection:
     return c
 
 
+_TRACK_META_SQL = """
+CREATE TABLE IF NOT EXISTS track_meta (
+    file_hash TEXT PRIMARY KEY,
+    title TEXT,
+    artist TEXT,
+    source_url TEXT,
+    video_id TEXT,
+    created_at TEXT
+);
+"""
+
+
 def init_db() -> None:
     with _DB_LOCK, _conn() as c:
+        c.executescript(_TRACK_META_SQL)
         c.executescript(
             """
             CREATE TABLE IF NOT EXISTS analyses (
@@ -66,6 +79,47 @@ def put_analysis(file_hash: str, data: dict[str, Any]) -> None:
             "INSERT OR REPLACE INTO analyses (file_hash, json, created_at) VALUES (?, ?, ?)",
             (file_hash, json.dumps(data), _now_iso()),
         )
+
+
+def put_track_meta(
+    file_hash: str,
+    title: str,
+    artist: str = "",
+    source_url: str = "",
+    video_id: str = "",
+) -> None:
+    with _DB_LOCK, _conn() as c:
+        # Create the table on the fly so old databases pick it up.
+        c.executescript(_TRACK_META_SQL)
+        c.execute(
+            "INSERT OR REPLACE INTO track_meta "
+            "(file_hash, title, artist, source_url, video_id, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (file_hash, title, artist, source_url, video_id, _now_iso()),
+        )
+
+
+def get_track_meta(file_hash: str) -> dict[str, Any] | None:
+    with _DB_LOCK, _conn() as c:
+        try:
+            row = c.execute(
+                "SELECT file_hash, title, artist, source_url, video_id, created_at "
+                "FROM track_meta WHERE file_hash = ?",
+                (file_hash,),
+            ).fetchone()
+        except sqlite3.OperationalError:
+            # Old database without the table yet.
+            return None
+        if not row:
+            return None
+        return {
+            "file_hash": row["file_hash"],
+            "title": row["title"] or "",
+            "artist": row["artist"] or "",
+            "source_url": row["source_url"] or "",
+            "video_id": row["video_id"] or "",
+            "created_at": row["created_at"] or "",
+        }
 
 
 def add_render(render_id: str, output_path: str, config: dict[str, Any]) -> dict[str, Any]:

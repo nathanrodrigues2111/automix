@@ -11,6 +11,7 @@ Scans `videos/` (recursively, .mp4 only). Returns:
   {
     "id": "string (sha256 of file path + size, 16 chars)",
     "filename": "...",
+    "title": "Martin Garrix - Animals (feat. X)",  // display title: track_meta (YouTube import) or cleaned filename
     "path": "videos/...",
     "duration_s": 234.5,
     "size_bytes": 256000000,
@@ -56,11 +57,33 @@ Body:
   "crossfade_bars": 1.0,
   "loudness_lufs": -14.0,
   "use_stem_crossfade": true,
-  "harmonic_pitch_shift_max_semitones": 2
+  "harmonic_pitch_shift_max_semitones": 2,
+  "brand_overlay": true,   // EDMPAPA pass: crop-fill 1920x1080, black letterbox bars, logo top-right
+  "show_titles": true      // per-clip track title centered in the bottom bar
 }
 ```
-Returns: `{ "job_id": "uuid", "output_path": "videos/automix_<ts>.mp4" }`
-Progress streamed over `/ws/progress`.
+Returns: `{ "job_id": "uuid", "output_path": null }` — the real output path arrives in the final WS progress message (`output_path` + `render_id`).
+
+### `POST /api/youtube/import`
+Body: `{ "url": "https://youtube.com/playlist?list=... or watch?v=...", "max_tracks": 10 }` (`max_tracks` optional).
+Returns: `{ "job_id": "uuid" }`.
+Downloads every playlist entry (or the single video) into `videos/` as best-quality h264+m4a MP4 named `<title> [<id>].mp4`. Already-downloaded entries are skipped; broken/private entries are skipped and counted. Clean display titles are stored per file and surface as `title` in `GET /api/tracks`.
+Progress over `/ws/progress` with `stage: "download"`; final message: `{ "percent": 100, "done": true, "message": "Imported N tracks" }` (or `"error: ..."`).
+
+### `POST /api/automix`
+One-shot pipeline: (optionally) import a playlist, analyze anything unanalyzed, pick the best drop per track, order by BPM ascending, and render a branded mix.
+Body:
+```json
+{
+  "url": "https://youtube.com/playlist?list=...",  // optional; imported first
+  "track_ids": ["abc123..."],                       // optional; default = every track in videos/
+  "max_tracks": 10,                                  // optional import cap
+  "config": { "crossfade_bars": 2, "proxy": true }  // optional RenderRequest-style overrides
+}
+```
+Returns: `{ "job_id": "uuid" }`.
+Default render config: `no_time_stretch=true, snap_to_downbeat=true, crossfade_bars=2, loudness_lufs=-14, use_stem_crossfade=false, use_eq_bass_swap=false, harmonic_pitch_shift_max_semitones=0, brand_overlay=true, show_titles=true` — `config` overrides win.
+Progress over `/ws/progress`, one job id across stages: `"download"` 0–30%, `"analysis"` 30–70%, `"render"` 70–100%. Tracks that fail analysis or have no usable drop are skipped (>= 1 usable clip required). Final message carries `output_path` and `render_id` exactly like `/api/render`.
 
 ### `GET /api/renders`
 Returns list of completed renders: `[{ "id", "output_path", "created_at", "config": {...} }]`.

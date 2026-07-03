@@ -32,6 +32,7 @@ class Analysis(BaseModel):
 class Track(BaseModel):
     id: str
     filename: str
+    title: str = ""  # display title (from track_meta or cleaned filename)
     path: str
     duration_s: float
     size_bytes: int
@@ -72,6 +73,20 @@ class RenderRequest(BaseModel):
     proxy: bool = False  # 720p, ultrafast preset, single-pass loudnorm, skip stems
     hard_cut: bool = False  # cut on downbeat with no crossfade (drops-only style)
     no_time_stretch: bool = False  # drops-only fast path: trim+concat each source, no BPM matching
+    brand_overlay: bool = True  # EDMPAPA letterbox bars + logo pass
+    show_titles: bool = True  # per-clip track title in the bottom bar
+
+
+class YouTubeImportRequest(BaseModel):
+    url: str
+    max_tracks: int | None = None
+
+
+class AutomixRequest(BaseModel):
+    url: str | None = None  # optional playlist/video URL to import first
+    track_ids: list[str] | None = None  # explicit tracks; default = all in videos/
+    max_tracks: int | None = None
+    config: dict = Field(default_factory=dict)  # RenderRequest-style overrides
 
 
 class RenderJobResponse(BaseModel):
@@ -109,8 +124,8 @@ class WaveformResponse(BaseModel):
 
 
 class ModelsStatus(BaseModel):
-    allin1: Literal["ready", "missing", "downloading"]
-    demucs: Literal["ready", "missing", "downloading"]
+    allin1: Literal["ready", "missing", "downloading", "unavailable"]
+    demucs: Literal["ready", "missing", "downloading", "unavailable"]
     downloaded_bytes: int = 0
     total_bytes: int = 0
 

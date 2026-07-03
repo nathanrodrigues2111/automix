@@ -43,14 +43,6 @@ function findPython() {
   return null;
 }
 
-const py = findPython();
-if (!py) {
-  console.error("No Python 3.11+ found on PATH. Run 'npm run check-system' for install hints.");
-  process.exit(1);
-}
-
-console.log(`>>> Using Python: ${py.bin} ${py.prefix.join(" ")}`.trimEnd());
-
 function run(cmd, args, opts = {}) {
   const res = spawnSync(cmd, args, { stdio: "inherit", ...opts });
   if (res.error) {
@@ -64,9 +56,35 @@ const venvPython = isWin
   ? join(venvDir, "Scripts", "python.exe")
   : join(venvDir, "bin", "python");
 
+// Prefer uv when available: it creates venvs without needing the OS
+// python3-venv/ensurepip package (missing on many Debian/Ubuntu installs)
+// and resolves/installs far faster.
+const hasUv = tryRun("uv", ["--version"]);
+
 if (!existsSync(venvDir)) {
   console.log(">>> Creating backend/.venv");
-  run(py.bin, [...py.prefix, "-m", "venv", ".venv"], { cwd: backendDir });
+  if (hasUv) {
+    run("uv", ["venv", ".venv", "--seed"], { cwd: backendDir });
+  } else {
+    const py = findPython();
+    if (!py) {
+      console.error(
+        "No Python 3.11+ found on PATH (and no 'uv'). Install uv (https://docs.astral.sh/uv/) or Python 3.11+, then re-run."
+      );
+      process.exit(1);
+    }
+    console.log(`>>> Using Python: ${py.bin} ${py.prefix.join(" ")}`.trimEnd());
+    const venvRes = spawnSync(py.bin, [...py.prefix, "-m", "venv", ".venv"], {
+      stdio: "inherit",
+      cwd: backendDir,
+    });
+    if (venvRes.status !== 0) {
+      console.error(
+        ">>> venv creation failed (missing python3-venv?). Install uv (https://docs.astral.sh/uv/) or `apt install python3-venv`, then re-run."
+      );
+      process.exit(1);
+    }
+  }
 }
 
 // Ensure pip is present (Debian/Ubuntu venvs sometimes ship without it).

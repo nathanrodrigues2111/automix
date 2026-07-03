@@ -11,19 +11,24 @@ dependencies = [
     "scipy>=1.11",
     "soundfile>=0.12",
     "librosa>=0.10",
-    "ffmpeg-python>=0.2",
     "pyrubberband>=0.4",
-    "allin1>=1.1",
-    "demucs>=4.0",
-    "torch>=2.1",
-    "torchaudio>=2.1",
-    "torchcodec>=0.1",
+    "yt-dlp>=2025.1.1",
     "websockets>=12.0",
     "aiofiles>=23.2",
     "python-multipart>=0.0.9",
 ]
 
 [project.optional-dependencies]
+# Optional neural analysis stack (allin1 structure labels + demucs stems).
+# Heavy (~2-3 GB with torch); everything works without it via the built-in
+# librosa fallback ("lite analysis mode").
+ml = [
+    "allin1>=1.1",
+    "demucs>=4.0",
+    "torch>=2.1",
+    "torchaudio>=2.1",
+    "torchcodec>=0.1",
+]
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",

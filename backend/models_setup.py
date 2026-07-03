@@ -44,19 +44,37 @@ def _allin1_importable() -> bool:
         return False
 
 
+def _demucs_importable() -> bool:
+    try:
+        import demucs.pretrained  # type: ignore  # noqa: F401
+        return True
+    except Exception:
+        return False
+
+
+def ml_installed() -> bool:
+    """True when the optional [ml] python stack (torch/allin1/demucs) is importable."""
+    return _allin1_importable() or _demucs_importable()
+
+
 def get_status() -> dict:
-    # If allin1 can't even import (e.g., missing native dep like natten), the
-    # librosa-based fallback in analysis.py handles structure detection
-    # transparently. Report "ready" so the UI doesn't block the user on a
-    # download that wouldn't help.
-    if not _allin1_importable():
-        allin1_ok = True
+    # Three states per model:
+    #   ready       — weights cached, neural path active
+    #   missing     — python package installed but weights not downloaded yet
+    #   unavailable — python package not installed (the [ml] extra); the
+    #                 librosa fallback in analysis.py handles everything, so
+    #                 this is informational, not a download prompt.
+    if _allin1_importable():
+        allin1 = "ready" if _any_files(_allin1_cache_dirs()) else "missing"
     else:
-        allin1_ok = _any_files(_allin1_cache_dirs())
-    demucs_ok = _any_files(_demucs_cache_dirs())
+        allin1 = "unavailable"
+    if _demucs_importable():
+        demucs = "ready" if _any_files(_demucs_cache_dirs()) else "missing"
+    else:
+        demucs = "unavailable"
     return {
-        "allin1": "ready" if allin1_ok else "missing",
-        "demucs": "ready" if demucs_ok else "missing",
+        "allin1": allin1,
+        "demucs": demucs,
         "downloaded_bytes": 0,
         "total_bytes": 0,
     }

@@ -18,11 +18,23 @@ import numpy as np
 
 import analysis as analysis_mod
 import db
+import youtube as youtube_mod
 
 BACKEND_DIR = Path(__file__).parent
 PROJECT_ROOT = BACKEND_DIR.parent
 VIDEOS_DIR = PROJECT_ROOT / "videos"
 RENDER_TMP_DIR = BACKEND_DIR / ".cache" / "renders"
+ASSETS_DIR = PROJECT_ROOT / "assets"
+LOGO_PATH = ASSETS_DIR / "edmpapa11.png"
+FONT_PATH = ASSETS_DIR / "Cubano.ttf"
+
+# EDMPAPA branding geometry (1920x1080 canvas).
+_BRAND_W = 1920
+_BRAND_H = 1080
+_BAR_H = 140
+_LOGO_H = 84
+_TITLE_FONT_SIZE = 56
+_LOGO_MARGIN_RIGHT = 48
 
 ProgressCb = Callable[[str, float, str], None] | None
 
@@ -84,14 +96,17 @@ def _x264_encode_args(proxy: bool) -> list[str]:
     case where the video has already been normalized."""
     if proxy:
         return ["-c:v", "libx264", "-crf", "28", "-preset", "ultrafast"]
-    return ["-c:v", "libx264", "-crf", "18", "-preset", "medium"]
+    return ["-c:v", "libx264", "-crf", "17", "-preset", "medium"]
 
 
 def _x264_args(proxy: bool) -> list[str]:
     """Full args: scale to a consistent resolution + encode. Used by trim/concat
-    to ensure clips have identical dimensions before downstream filters."""
-    scale = "scale=-2:720" if proxy else "scale=-2:1080"
-    return ["-vf", scale, *_x264_encode_args(proxy)]
+    to ensure clips have IDENTICAL dimensions before downstream filters —
+    xfade errors out on mismatched inputs, so crop-fill to a fixed canvas
+    (plain scale=-2:H keeps the source aspect and widths then differ)."""
+    w, h = (1280, 720) if proxy else (_BRAND_W, _BRAND_H)
+    vf = f"scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h},setsar=1"
+    return ["-vf", vf, *_x264_encode_args(proxy)]
 
 
 def _trim_video_clip(src: Path, start_s: float, duration_s: float, out: Path, proxy: bool = False) -> None:
@@ -353,6 +368,201 @@ def _mux_video_audio(video_path: Path, audio_wav: Path, out_path: Path) -> None:
     subprocess.run(cmd, check=True, capture_output=True)
 
 
+def _probe_dims(path: Path) -> tuple[int, int]:
+    r = subprocess.run(
+        [
+            "ffprobe", "-v", "error", "-select_streams", "v:0",
+            "-show_entries", "stream=width,height",
+            "-of", "csv=p=0",
+            str(path),
+        ],
+        capture_output=True, text=True, check=True,
+    )
+    w, h = r.stdout.strip().split(",")[:2]
+    return int(w), int(h)
+
+
+def _probe_duration(path: Path) -> float:
+    r = subprocess.run(
+        [
+            "ffprobe", "-v", "error",
+            "-show_entries", "format=duration",
+            "-of", "default=noprint_wrappers=1:nokey=1",
+            str(path),
+        ],
+        capture_output=True, text=True, check=True,
+    )
+    return float(r.stdout.strip())
+
+
+def compute_title_windows(
+    durations: list[float], crossfades_s: list[float]
+) -> list[tuple[float, float]]:
+    """Per-part [start, end) windows in the FINAL (post-xfade) timeline.
+
+    Uses the same offset math as _xfade_videos: part i starts at
+    s_i = s_{i-1} + d_{i-1} - cf_{i-1}; the title switches at each xfade
+    midpoint (offset_i + cf_i / 2). Pure function so it's unit-testable.
+    """
+    if not durations:
+        return []
+    if len(crossfades_s) != len(durations) - 1:
+        raise ValueError("crossfades count must be len(durations) - 1")
+    switches: list[float] = []
+    cumulative = durations[0]
+    for i in range(1, len(durations)):
+        cf = max(0.05, crossfades_s[i - 1])
+        offset = max(0.0, cumulative - cf)
+        switches.append(offset + cf / 2.0)
+        cumulative = cumulative + durations[i] - cf
+    total = cumulative
+    windows: list[tuple[float, float]] = []
+    prev = 0.0
+    for i in range(len(durations)):
+        end = switches[i] if i < len(switches) else total
+        windows.append((prev, end))
+        prev = end
+    return windows
+
+
+def _ass_escape(text: str) -> str:
+    """Sanitize text for an ASS Dialogue line: backslashes start control codes
+    and braces open override blocks, so neutralize them; newlines collapse."""
+    return (
+        text.replace("\\", "/")
+        .replace("{", "(")
+        .replace("}", ")")
+        .replace("\n", " ")
+        .replace("\r", " ")
+    )
+
+
+def _ass_time(t: float) -> str:
+    t = max(0.0, t)
+    h = int(t // 3600)
+    m = int((t % 3600) // 60)
+    s = t % 60
+    return f"{h}:{m:02d}:{s:05.2f}"
+
+
+def _write_title_ass(title_windows: list[tuple[str, float, float]], out_ass: Path) -> None:
+    """Build an ASS subtitle file with one centered title per window, anchored
+    in the middle of the bottom letterbox bar. Rendered with the libass `ass`
+    filter (this ffmpeg build has no drawtext) using fontsdir=ASSETS_DIR so
+    Cubano.ttf needs no system install."""
+    y_center = _BRAND_H - _BAR_H // 2  # vertical center of the bottom bar
+    lines = [
+        "[Script Info]",
+        "ScriptType: v4.00+",
+        f"PlayResX: {_BRAND_W}",
+        f"PlayResY: {_BRAND_H}",
+        "WrapStyle: 2",
+        "ScaledBorderAndShadow: yes",
+        "",
+        "[V4+ Styles]",
+        "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, "
+        "OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, "
+        "ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, "
+        "Alignment, MarginL, MarginR, MarginV, Encoding",
+        f"Style: Title,Cubano,{_TITLE_FONT_SIZE},&H00FFFFFF,&H00FFFFFF,"
+        "&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,0,0,5,0,0,0,1",
+        "",
+        "[Events]",
+        "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
+    ]
+    for title, start_s, end_s in title_windows:
+        if end_s <= start_s:
+            continue
+        txt = _ass_escape(title.upper())
+        lines.append(
+            f"Dialogue: 0,{_ass_time(start_s)},{_ass_time(end_s)},Title,,0,0,0,,"
+            f"{{\\pos({_BRAND_W // 2},{y_center})}}{txt}"
+        )
+    out_ass.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _display_title(src: Path) -> str:
+    """Overlay title for a source track: track_meta title if imported via
+    YouTube, else a cleaned-up filename stem."""
+    meta = db.get_track_meta(analysis_mod.file_hash(src))
+    if meta and meta.get("title"):
+        return meta["title"]
+    return youtube_mod.clean_title(src.stem)
+
+
+def _apply_branding(
+    video_in: Path,
+    out_path: Path,
+    title_windows: list[tuple[str, float, float]],
+    proxy: bool,
+) -> None:
+    """EDMPAPA branding pass: crop-fill to 1920x1080, draw black letterbox
+    bars OVER the video (top+bottom, 140px), overlay the logo in the top bar
+    and render one title per (title, start_s, end_s) window in the bottom bar
+    (via a libass subtitle track — this ffmpeg build ships without drawtext)."""
+    have_logo = LOGO_PATH.exists()
+    have_font = FONT_PATH.exists()
+    if not have_logo:
+        print(f"[render] branding: logo missing at {LOGO_PATH}, skipping logo")
+    if not have_font and title_windows:
+        print(f"[render] branding: font missing at {FONT_PATH}, skipping titles")
+
+    filters: list[str] = []
+    label = "base"
+    filters.append(
+        f"[0:v]scale={_BRAND_W}:{_BRAND_H}:force_original_aspect_ratio=increase,"
+        f"crop={_BRAND_W}:{_BRAND_H},setsar=1,"
+        f"drawbox=x=0:y=0:w=iw:h={_BAR_H}:color=black:t=fill,"
+        f"drawbox=x=0:y=ih-{_BAR_H}:w=iw:h={_BAR_H}:color=black:t=fill[{label}]"
+    )
+    if have_logo:
+        try:
+            lw, lh = _probe_dims(LOGO_PATH)
+        except Exception:
+            lw, lh = 0, 0
+        if (lw, lh) == (_BRAND_W, _BRAND_H):
+            # edmpapa11.png is a ready-made full-frame overlay (opaque bars
+            # top/bottom with the wordmark baked in, transparent middle) —
+            # composite it 1:1 instead of shrinking the whole frame to 84px.
+            filters.append(f"[{label}][1:v]overlay=x=0:y=0[branded]")
+        else:
+            filters.append(f"[1:v]scale=-1:{_LOGO_H}[logo]")
+            filters.append(
+                f"[{label}][logo]overlay=x=W-w-{_LOGO_MARGIN_RIGHT}:"
+                f"y=({_BAR_H}-{_LOGO_H})/2[branded]"
+            )
+        label = "branded"
+    try:
+        acodec = analysis_mod.probe_basic(video_in).get("codec_audio", "")
+    except Exception:
+        acodec = ""
+    audio_args = ["-c:a", "copy"] if acodec == "aac" else ["-c:a", "aac", "-b:a", "320k"]
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="brand_") as tmp:
+        if have_font and title_windows:
+            ass_path = Path(tmp) / "titles.ass"
+            _write_title_ass(title_windows, ass_path)
+            filters.append(
+                f"[{label}]ass=filename='{ass_path}':fontsdir='{ASSETS_DIR}'[titled]"
+            )
+            label = "titled"
+
+        cmd = ["ffmpeg", "-y", "-i", str(video_in)]
+        if have_logo:
+            cmd += ["-i", str(LOGO_PATH)]
+        cmd += [
+            "-filter_complex", ";".join(filters),
+            "-map", f"[{label}]", "-map", "0:a?",
+            *_x264_encode_args(proxy),
+            "-pix_fmt", "yuv420p",
+            "-movflags", "+faststart",
+            *audio_args,
+            str(out_path),
+        ]
+        subprocess.run(cmd, check=True, capture_output=True)
+
+
 def _xfade_videos(
     parts: list[Path],
     crossfades_s: list[float],
@@ -369,18 +579,7 @@ def _xfade_videos(
     if len(crossfades_s) != len(parts) - 1:
         raise ValueError("crossfades count must be len(parts) - 1")
 
-    durations: list[float] = []
-    for p in parts:
-        r = subprocess.run(
-            [
-                "ffprobe", "-v", "error",
-                "-show_entries", "format=duration",
-                "-of", "default=noprint_wrappers=1:nokey=1",
-                str(p),
-            ],
-            capture_output=True, text=True, check=True,
-        )
-        durations.append(float(r.stdout.strip()))
+    durations: list[float] = [_probe_duration(p) for p in parts]
 
     inputs: list[str] = []
     for p in parts:
@@ -456,6 +655,8 @@ def render_mix(
     proxy = bool(config.get("proxy", False))
     no_stretch = bool(config.get("no_time_stretch", False))
     max_pitch_st = float(config.get("harmonic_pitch_shift_max_semitones", 2.0))
+    brand_overlay = bool(config.get("brand_overlay", True))
+    show_titles = bool(config.get("show_titles", True))
 
     # When no_time_stretch is on, force the per-clip stretch ratio to 1.0.
     # Each clip plays at its native BPM (no setpts on video, no rubberband on
@@ -649,11 +850,24 @@ def render_mix(
         _xfade_videos(clip_videos, crossfade_durations, concat_video, proxy=proxy)
 
     if progress:
-        progress("render", 93.0, "Muxing video and audio")
+        progress("render", 93.0, "Muxing")
     ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     out_path = VIDEOS_DIR / f"automix_{ts}.mp4"
     VIDEOS_DIR.mkdir(parents=True, exist_ok=True)
-    _mux_video_audio(concat_video, final_audio, out_path)
+    if brand_overlay:
+        muxed = work / "muxed.mp4"
+        _mux_video_audio(concat_video, final_audio, muxed)
+        if progress:
+            progress("render", 96.0, "Applying EDMPAPA branding")
+        windows: list[tuple[str, float, float]] = []
+        if show_titles:
+            titles = [_display_title(src) for src in srcs]
+            durations = [_probe_duration(v) for v in clip_videos]
+            spans = compute_title_windows(durations, crossfade_durations)
+            windows = [(titles[i], s, e) for i, (s, e) in enumerate(spans)]
+        _apply_branding(muxed, out_path, windows, proxy)
+    else:
+        _mux_video_audio(concat_video, final_audio, out_path)
 
     render_id = uuid.uuid4().hex
     record = db.add_render(render_id, str(out_path.relative_to(PROJECT_ROOT)), config)

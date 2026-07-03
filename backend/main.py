@@ -17,6 +17,7 @@ import db
 import models_setup
 import render as render_mod
 import schemas
+import youtube as youtube_mod
 
 app = FastAPI(title="Automix Backend")
 
@@ -106,6 +107,11 @@ async def on_startup() -> None:
 
 # ---------- Track scanning ----------
 
+# track_id -> source path. Refreshed on every _scan_tracks; _resolve_track_path
+# falls back to an rglob scan on miss (imported playlists add files at runtime).
+_TRACK_PATH_CACHE: dict[str, Path] = {}
+
+
 def _scan_tracks() -> list[dict]:
     if not VIDEOS_DIR.exists():
         return []
@@ -121,6 +127,9 @@ def _scan_tracks() -> list[dict]:
             continue
         fh = analysis_mod.file_hash(path)
         tid = fh[:16]
+        _TRACK_PATH_CACHE[tid] = path
+        meta = db.get_track_meta(fh)
+        title = meta["title"] if meta and meta.get("title") else youtube_mod.clean_title(path.stem)
         cached = db.get_analysis(fh)
         # Backfill: older analyses don't have `drops`. Compute lazily from the
         # cached WAV (fast — ~1-2s per track on first scan) and persist.
@@ -142,6 +151,7 @@ def _scan_tracks() -> list[dict]:
             {
                 "id": tid,
                 "filename": path.name,
+                "title": title,
                 "path": rel,
                 "duration_s": basic["duration_s"],
                 "size_bytes": basic["size_bytes"],
@@ -155,8 +165,13 @@ def _scan_tracks() -> list[dict]:
 
 
 def _resolve_track_path(track_id: str) -> Path:
+    cached = _TRACK_PATH_CACHE.get(track_id)
+    if cached is not None and cached.exists():
+        return cached
     for path in VIDEOS_DIR.rglob("*.mp4"):
-        if analysis_mod.file_hash(path)[:16] == track_id:
+        tid = analysis_mod.file_hash(path)[:16]
+        _TRACK_PATH_CACHE[tid] = path
+        if tid == track_id:
             return path
     raise HTTPException(status_code=404, detail=f"track {track_id} not found")
 
@@ -316,6 +331,177 @@ async def post_render(req: schemas.RenderRequest) -> dict:
     return {"job_id": job_id, "output_path": None}
 
 
+@app.post("/api/youtube/import")
+async def post_youtube_import(req: schemas.YouTubeImportRequest) -> dict:
+    job_id = uuid.uuid4().hex
+    progress = make_progress(job_id)
+
+    async def _run():
+        try:
+            results = await asyncio.to_thread(
+                youtube_mod.import_playlist, req.url, VIDEOS_DIR, progress, req.max_tracks
+            )
+            hub.publish_sync(
+                {
+                    "job_id": job_id,
+                    "stage": "download",
+                    "percent": 100.0,
+                    "message": f"Imported {len(results)} tracks",
+                    "done": True,
+                }
+            )
+        except Exception as e:
+            hub.publish_sync(
+                {
+                    "job_id": job_id,
+                    "stage": "download",
+                    "percent": 100.0,
+                    "message": f"error: {e}",
+                    "done": True,
+                }
+            )
+
+    asyncio.create_task(_run())
+    return {"job_id": job_id}
+
+
+# ---------- Automix: import → analyze → pick drops → render ----------
+
+AUTOMIX_DEFAULT_CONFIG: dict[str, Any] = {
+    "no_time_stretch": True,
+    "snap_to_downbeat": True,
+    "crossfade_bars": 2,
+    "loudness_lufs": -14,
+    "use_stem_crossfade": False,
+    "use_eq_bass_swap": False,
+    "harmonic_pitch_shift_max_semitones": 0,
+    "brand_overlay": True,
+    "show_titles": True,
+}
+
+
+def _track_title(path: Path) -> str:
+    meta = db.get_track_meta(analysis_mod.file_hash(path))
+    if meta and meta.get("title"):
+        return meta["title"]
+    return youtube_mod.clean_title(path.stem)
+
+
+def _automix_pipeline(req: schemas.AutomixRequest, progress) -> dict:
+    """Sync pipeline run in a worker thread. Returns the render record."""
+    # 1. Optional playlist import, mapped to 0-30%.
+    if req.url:
+        def dl_progress(stage: str, pct: float, msg: str = "") -> None:
+            progress("download", min(30.0, pct * 0.30), msg)
+
+        youtube_mod.import_playlist(req.url, VIDEOS_DIR, dl_progress, req.max_tracks)
+
+    # 2. Determine source tracks.
+    if req.track_ids:
+        paths = [_resolve_track_path(tid) for tid in req.track_ids]
+    else:
+        paths = [
+            p for p in sorted(VIDEOS_DIR.rglob("*.mp4"))
+            if not p.name.startswith("automix_")
+        ]
+    if not paths:
+        raise RuntimeError("no tracks found to mix")
+
+    # 3. Analyze tracks missing cached analysis, mapped to 30-70%.
+    n = len(paths)
+    entries: list[tuple[str, dict]] = []
+    for i, path in enumerate(paths):
+        fh = analysis_mod.file_hash(path)
+        title = _track_title(path)
+        cached = db.get_analysis(fh)
+        if cached is None:
+            base = 30.0 + i / n * 40.0
+            span = 40.0 / n
+            msg = f"Analyzing {i + 1}/{n}: {title}"
+            progress("analysis", base, msg)
+
+            def sub(stage: str, pct: float, m: str = "", _b=base, _s=span, _msg=msg) -> None:
+                progress("analysis", min(70.0, _b + pct / 100.0 * _s), _msg)
+
+            try:
+                cached = analysis_mod.analyze_track(path, sub)
+                db.put_analysis(fh, cached)
+            except Exception:
+                # One bad track must not kill the whole automix.
+                continue
+        entries.append((fh, cached))
+    progress("analysis", 70.0, f"Analysis ready for {len(entries)}/{n} tracks")
+
+    # 4. Build clips: best-scoring drop per track, ordered by BPM ascending.
+    clips: list[dict] = []
+    for fh, a in entries:
+        drops = a.get("drops") or []
+        if drops:
+            best = max(drops, key=lambda d: float(d.get("score", 0.0)))
+            start, end, kick = best.get("start_s"), best.get("end_s"), best.get("kick_s")
+        else:
+            start, end, kick = a.get("drop_start_s"), a.get("drop_end_s"), None
+        if start is None or end is None or float(end) <= float(start):
+            continue  # no usable drop in this track
+        clips.append(
+            {
+                "track_id": fh[:16],
+                "start_s": float(start),
+                "end_s": float(end),
+                "kick_s": float(kick) if kick is not None else None,
+                "length_bars": 16,
+                "_bpm": float(a.get("bpm", 0.0)),
+            }
+        )
+    if not clips:
+        raise RuntimeError("no usable drops found in any track")
+    clips.sort(key=lambda c: c["_bpm"])
+    for c in clips:
+        c.pop("_bpm")
+
+    # 5. Render, mapped to 70-100%.
+    config = {**AUTOMIX_DEFAULT_CONFIG, **(req.config or {}), "clips": clips}
+
+    def render_progress(stage: str, pct: float, msg: str = "") -> None:
+        progress("render", min(99.5, 70.0 + pct * 0.30), msg)
+
+    return render_mod.render_mix(config, _resolve_track_path, render_progress)
+
+
+@app.post("/api/automix")
+async def post_automix(req: schemas.AutomixRequest) -> dict:
+    job_id = uuid.uuid4().hex
+    progress = make_progress(job_id)
+
+    async def _run():
+        try:
+            record = await asyncio.to_thread(_automix_pipeline, req, progress)
+            hub.publish_sync(
+                {
+                    "job_id": job_id,
+                    "stage": "render",
+                    "percent": 100.0,
+                    "message": "Done",
+                    "done": True,
+                    "output_path": record["output_path"],
+                    "render_id": record["id"],
+                }
+            )
+        except Exception as e:
+            hub.publish_sync(
+                {
+                    "job_id": job_id,
+                    "stage": "render",
+                    "percent": 100.0,
+                    "message": f"error: {e}",
+                    "done": True,
+                }
+            )
+
+    asyncio.create_task(_run())
+    return {"job_id": job_id}
+
+
 @app.get("/api/renders")
 async def get_renders() -> list[dict]:
     return await asyncio.to_thread(db.list_renders)
@@ -347,6 +533,15 @@ async def models_status() -> dict:
 
 @app.post("/api/models/download")
 async def models_download() -> dict:
+    if not await asyncio.to_thread(models_setup.ml_installed):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "The optional neural stack isn't installed in this venv. "
+                'Install it with: pip install -e "backend[ml]" (~2-3 GB, needs a GPU to be practical), '
+                "then retry. The built-in lite analyzer works without it."
+            ),
+        )
     job_id = "models"
     progress = make_progress(job_id)
 

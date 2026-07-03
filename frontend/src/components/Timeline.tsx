@@ -32,6 +32,7 @@ export function Timeline({
   const regionsRef = useRef<RegionsPlugin | null>(null)
   const startRegionRef = useRef<Region | null>(null)
   const endRegionRef = useRef<Region | null>(null)
+  const selectionRegionRef = useRef<Region | null>(null)
   const onChangeRef = useRef(onChange)
   useEffect(() => {
     onChangeRef.current = onChange
@@ -96,6 +97,49 @@ export function Timeline({
       startRegionRef.current = startRegion
       endRegionRef.current = endRegion
 
+      // A 0.05s region is sub-pixel at full-track zoom — rebuild each marker
+      // element into a DAW-style trim handle: a slim glowing line spanning the
+      // waveform with a rounded grip knob on top. Inline styles because the
+      // waveform lives in a shadow root that outside CSS can't reach.
+      const styleHandle = (r: Region, rgb: string, gripTop: boolean) => {
+        const el = (r as unknown as { element?: HTMLElement }).element
+        if (!el) return
+        Object.assign(el.style, {
+          minWidth: "18px",
+          marginLeft: "-9px",
+          background: "transparent",
+          cursor: "ew-resize",
+          zIndex: "6",
+        })
+        el.innerHTML = `
+          <div style="position:absolute;top:0;bottom:0;left:50%;width:2px;
+            transform:translateX(-50%);border-radius:1px;
+            background:rgba(${rgb},0.95);
+            box-shadow:0 0 8px rgba(${rgb},0.7);"></div>
+          <div style="position:absolute;${gripTop ? "top:2px" : "bottom:2px"};left:50%;
+            transform:translateX(-50%);width:14px;height:18px;border-radius:7px;
+            background:linear-gradient(180deg,rgba(${rgb},1),rgba(${rgb},0.75));
+            box-shadow:0 1px 4px rgba(0,0,0,0.5),inset 0 1px 0 rgba(255,255,255,0.35);
+            display:flex;align-items:center;justify-content:center;gap:2px;">
+            <span style="width:1.5px;height:8px;border-radius:1px;background:rgba(255,255,255,0.85)"></span>
+            <span style="width:1.5px;height:8px;border-radius:1px;background:rgba(255,255,255,0.85)"></span>
+          </div>`
+        el.onmouseenter = () => (el.style.filter = "brightness(1.25)")
+        el.onmouseleave = () => (el.style.filter = "")
+      }
+      styleHandle(startRegion, "52, 211, 153", true)
+      styleHandle(endRegion, "251, 113, 133", false)
+
+      // Shaded DAW-style selection band between the trim markers.
+      selectionRegionRef.current = regions.addRegion({
+        id: "selection",
+        start: dropStart,
+        end: Math.min(duration, dropEnd),
+        color: "rgba(168, 85, 247, 0.12)",
+        drag: false,
+        resize: false,
+      })
+
       // Each detected drop gets its own non-draggable highlight band.
       const drops = track.analysis?.drops ?? []
       drops.forEach((d: Drop, i: number) => {
@@ -126,17 +170,38 @@ export function Timeline({
       }),
     )
 
+    // Snap a dragged marker to the nearest downbeat when within 0.2s of one,
+    // so manual trims still land on bar lines (like the auto-detected cuts).
+    const snap = (t: number): number => {
+      const dbs = track.analysis?.downbeats
+      if (!dbs?.length) return t
+      const nearest = dbs.reduce((a, b) =>
+        Math.abs(b - t) < Math.abs(a - t) ? b : a,
+      )
+      return Math.abs(nearest - t) <= 0.2 ? nearest : t
+    }
+
     subs.push(
       regions.on("region-updated", (region) => {
         if (region.id === "drop_start") {
+          const snapped = snap(region.start)
+          if (Math.abs(snapped - region.start) > 0.001) {
+            region.setOptions({ start: snapped, end: snapped + 0.05 })
+          }
+          const end = endRegionRef.current?.start ?? dropEnd
           onChangeRef.current({
-            dropStart: region.start,
-            dropEnd: endRegionRef.current?.start ?? dropEnd,
+            dropStart: Math.min(snapped, end - 1),
+            dropEnd: end,
           })
         } else if (region.id === "drop_end") {
+          const snapped = snap(region.start)
+          if (Math.abs(snapped - region.start) > 0.001) {
+            region.setOptions({ start: snapped, end: snapped + 0.05 })
+          }
+          const start = startRegionRef.current?.start ?? dropStart
           onChangeRef.current({
-            dropStart: startRegionRef.current?.start ?? dropStart,
-            dropEnd: region.start,
+            dropStart: start,
+            dropEnd: Math.max(snapped, start + 1),
           })
         }
       }),
@@ -149,6 +214,7 @@ export function Timeline({
       regionsRef.current = null
       startRegionRef.current = null
       endRegionRef.current = null
+      selectionRegionRef.current = null
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [track.id, theme])
@@ -158,7 +224,8 @@ export function Timeline({
     if (s && Math.abs(s.start - dropStart) > 0.01) {
       s.setOptions({ start: dropStart, end: dropStart + 0.05 })
     }
-  }, [dropStart])
+    selectionRegionRef.current?.setOptions({ start: dropStart, end: dropEnd })
+  }, [dropStart, dropEnd])
 
   useEffect(() => {
     const e = endRegionRef.current

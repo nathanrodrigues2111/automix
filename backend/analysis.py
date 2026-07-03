@@ -212,7 +212,7 @@ def find_drops(
     # ~19s, buildups run 4-7s, drop bodies sustain 4-9s. Clip = buildup + body.
     min_buildup_s = 2.0
     max_buildup_s = 8.0
-    min_drop_len_s = 4.0
+    min_drop_len_s = 8.0
     max_drop_len_s = 10.0
 
     # Smoothed RMS for measuring sustained drop energy (~0.5s window).
@@ -239,31 +239,57 @@ def find_drops(
         min_offset = int(np.argmin(segment))
         return float(librosa.frames_to_time(start_idx + min_offset, sr=sr, hop_length=hop))
 
+    bar_s = 4.0 * 60.0 / bpm if bpm > 0 else 1.875
+    dbs = sorted(float(d) for d in downbeats) if downbeats else []
+
     drops: list[dict[str, Any]] = []
     for idx in order:
         peak_idx = int(peaks[idx])
         drop_t = float(librosa.frames_to_time(peak_idx, sr=sr, hop_length=hop))
         if drop_t < 15.0:
             continue
+
+        # PHRASE-QUANTIZED cut: EDM sections are 4/8/16-bar phrases, so the
+        # clip must end exactly N bars after the kick on the track's own beat
+        # grid — energy thresholds land mid-phrase and feel like the track is
+        # cut short or dragging past where the next drop should arrive.
+        if dbs:
+            kick_i = min(range(len(dbs)), key=lambda i: abs(dbs[i] - drop_t))
+            kick_t = dbs[kick_i]
+        else:
+            kick_i = None
+            kick_t = drop_t
+
         natural_end = _scan_drop_end(peak_idx)
-        drop_len_s = max(min_drop_len_s, min(max_drop_len_s, natural_end - drop_t))
+        sustain_s = max(0.0, natural_end - kick_t)
+        # 8 bars when the drop's energy actually sustains that long, else 4.
+        n_bars = 8 if sustain_s >= 7.0 * bar_s else 4
+
+        if kick_i is not None and len(dbs) > 1:
+            # The grid may be spaced at 2 bars (half-tempo beat tracking that
+            # was octave-corrected) — convert the bar count to grid steps.
+            spacing = float(np.median(np.diff(dbs)))
+            steps = max(1, round(n_bars * bar_s / spacing)) if spacing > 0 else n_bars
+            if kick_i + steps < len(dbs):
+                end = dbs[kick_i + steps]
+            else:
+                end = min(duration, kick_t + n_bars * bar_s)
+        else:
+            end = min(duration, kick_t + n_bars * bar_s)
+
+        # A drop body shorter than ~3.5 bars (kick too close to the end of the
+        # track) is unusable as a mix clip.
+        if end - kick_t < 3.5 * bar_s:
+            continue
 
         buildup_start_t = _scan_buildup_start(peak_idx)
-        buildup_s = max(min_buildup_s, min(max_buildup_s, drop_t - buildup_start_t))
+        buildup_s = max(min_buildup_s, min(max_buildup_s, kick_t - buildup_start_t))
+        desired_start = max(0.0, kick_t - buildup_s)
+        start = _snap_to_downbeat(desired_start, dbs) if dbs else desired_start
+        if start >= kick_t:
+            start = max(0.0, kick_t - min_buildup_s)
 
-        desired_start = max(0.0, drop_t - buildup_s)
-        start = _snap_to_downbeat(desired_start, downbeats) if downbeats else desired_start
-        natural_end = min(start + (drop_t - start) + drop_len_s, duration)
-        # Snap end to the nearest downbeat too — every transition boundary in
-        # the mix then lands on a bar line in both source tracks.
-        end = _snap_to_downbeat(natural_end, downbeats) if downbeats else natural_end
-        # Guarantee at least one full bar in the drop after the kick.
-        min_after_kick = max(0.5, (drop_t - start) * 0.5)
-        if end < drop_t + min_after_kick:
-            end = min(duration, drop_t + min_after_kick)
-            end = _snap_to_downbeat(end, downbeats) if downbeats else end
-        kick_t = drop_t
-        if end <= start:
+        if end <= kick_t or end <= start:
             continue
         drops.append(
             {

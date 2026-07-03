@@ -370,7 +370,10 @@ async def post_youtube_import(req: schemas.YouTubeImportRequest) -> dict:
 AUTOMIX_DEFAULT_CONFIG: dict[str, Any] = {
     "no_time_stretch": True,
     "snap_to_downbeat": True,
-    "crossfade_bars": 2,
+    # Short, beat-snapped blend. Long crossfades overlap two off-tempo beat
+    # grids (clips play at native BPM) and audibly clash; ~1 beat-bar of
+    # overlap keeps the cut tight, EDMPAPA style.
+    "crossfade_bars": 0.5,
     "loudness_lufs": -14,
     "use_stem_crossfade": False,
     "use_eq_bass_swap": False,
@@ -434,6 +437,14 @@ def _automix_pipeline(req: schemas.AutomixRequest, progress) -> dict:
 
     # 4. Build clips: best-scoring drop per track, ordered by BPM ascending.
     clips: list[dict] = []
+    # Transition style measured from the reference EDMPAPA mix (014oXybzUkc):
+    # each track plays at full energy until ~1-1.5s before the NEXT kick, then
+    # a sub-second "breath" (riser tail), then the drop slams in. Long buildups
+    # between drops don't exist there — so after ordering, trim every clip
+    # except the first down to a short pre-kick breath. The first clip keeps
+    # its full detected buildup as the mix intro.
+    BREATH_S = 1.25
+
     for fh, a in entries:
         drops = a.get("drops") or []
         if drops:
@@ -456,8 +467,10 @@ def _automix_pipeline(req: schemas.AutomixRequest, progress) -> dict:
     if not clips:
         raise RuntimeError("no usable drops found in any track")
     clips.sort(key=lambda c: c["_bpm"])
-    for c in clips:
+    for i, c in enumerate(clips):
         c.pop("_bpm")
+        if i > 0 and c["kick_s"] is not None:
+            c["start_s"] = max(c["start_s"], c["kick_s"] - BREATH_S)
 
     # 5. Render, mapped to 70-100%.
     config = {**AUTOMIX_DEFAULT_CONFIG, **(req.config or {}), "clips": clips}

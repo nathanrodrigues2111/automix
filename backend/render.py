@@ -798,12 +798,17 @@ def render_mix(
     default_crossfade_s = _bars_to_seconds(crossfade_bars, target_bpm)
 
     def _crossfade_for(b_clip: dict) -> float:
-        # When the incoming clip has a known kick_s, overlap the crossfade with
-        # its buildup so A's drop ends exactly when B's drop kicks in.
+        # Overlap only the START of the incoming clip's buildup with the
+        # outgoing drop's tail. Overlapping the whole buildup (old behavior)
+        # buried the riser under the previous drop and produced a flat wall of
+        # sound — the mix never breathed. Capping the overlap lets most of the
+        # buildup play clean, restoring the tension-release rhythm of the
+        # reference EDMPAPA mixes (audible energy dip, then the kick).
         kick = b_clip.get("kick_s")
         start = b_clip.get("start_s")
         if kick is not None and start is not None and float(kick) > float(start):
-            return float(kick) - float(start)
+            buildup = float(kick) - float(start)
+            return min(buildup, default_crossfade_s)
         return default_crossfade_s
 
     # IMPORTANT: stem-aware crossfade functions take *full clean clips* on both

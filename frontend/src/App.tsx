@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react"
 import { toast } from "sonner"
 import {
   Disc3,
+  Plus,
   ListMusic,
   Monitor,
   Moon,
@@ -28,7 +29,7 @@ import { SettingsDialog } from "@/components/SettingsDialog"
 import { useTracks } from "@/api/client"
 import type { Drop, Project, RenderConfig, Track } from "@/api/types"
 import { useProgressSocket } from "@/hooks/useProgressSocket"
-import { displayTitle } from "@/lib/format"
+import { displayTitle, formatDuration } from "@/lib/format"
 import { setThemePref, useThemePref, type ThemePref } from "@/lib/theme"
 import { cn } from "@/lib/utils"
 
@@ -153,6 +154,57 @@ export default function App() {
     mq.addEventListener("change", onChange)
     return () => mq.removeEventListener("change", onChange)
   }, [])
+  // Resizable desktop columns: widths of the left (tracks) and right (mix
+  // editor) panels in px, dragged via the dividers between columns.
+  const COLS_KEY = "automix.columns.v1"
+  const [colWidths, setColWidths] = useState<{ left: number; right: number }>(
+    () => {
+      try {
+        const raw = localStorage.getItem(COLS_KEY)
+        if (raw) {
+          const p = JSON.parse(raw) as { left?: number; right?: number }
+          return {
+            left: Math.min(520, Math.max(200, p.left ?? 260)),
+            right: Math.min(600, Math.max(280, p.right ?? 360)),
+          }
+        }
+      } catch {
+        // fall through to defaults
+      }
+      return { left: 260, right: 360 }
+    },
+  )
+  useEffect(() => {
+    try {
+      localStorage.setItem(COLS_KEY, JSON.stringify(colWidths))
+    } catch {
+      // storage unavailable
+    }
+  }, [colWidths])
+
+  const startColumnDrag =
+    (side: "left" | "right") => (e: React.PointerEvent<HTMLDivElement>) => {
+      e.preventDefault()
+      const startX = e.clientX
+      const startW = colWidths[side]
+      const el = e.currentTarget
+      el.setPointerCapture(e.pointerId)
+      const onMove = (ev: PointerEvent) => {
+        const delta = side === "left" ? ev.clientX - startX : startX - ev.clientX
+        const next = Math.min(
+          side === "left" ? 520 : 600,
+          Math.max(side === "left" ? 200 : 280, startW + delta),
+        )
+        setColWidths((w) => ({ ...w, [side]: next }))
+      }
+      const onUp = () => {
+        window.removeEventListener("pointermove", onMove)
+        window.removeEventListener("pointerup", onUp)
+      }
+      window.addEventListener("pointermove", onMove)
+      window.addEventListener("pointerup", onUp)
+    }
+
   const [renderMode, setRenderMode] = useState<"preview" | "full" | null>(null)
   const [activeTab, setActiveTab] = useState<ActiveTab>("preview")
   const [playRequest, setPlayRequest] = useState<PlayRequest | null>(null)
@@ -187,12 +239,25 @@ export default function App() {
   const [prevDropSeedKey, setPrevDropSeedKey] = useState<string | null>(null)
   if (dropSeedKey !== prevDropSeedKey) {
     setPrevDropSeedKey(dropSeedKey)
-    setDropStart(selectedTrack?.analysis?.drop_start_s ?? 0)
-    setDropEnd(selectedTrack?.analysis?.drop_end_s ?? 0)
+    // Seed the trim range from the best-scoring detected drop so the markers
+    // land where the drop actually is; the coarse chorus range is a fallback.
+    const drops = selectedTrack?.analysis?.drops ?? []
+    const best = drops.length
+      ? drops.reduce((a, b) => (b.score > a.score ? b : a))
+      : null
+    setDropStart(best?.start_s ?? selectedTrack?.analysis?.drop_start_s ?? 0)
+    setDropEnd(best?.end_s ?? selectedTrack?.analysis?.drop_end_s ?? 0)
   }
 
   const handlePreviewDrop = (t: Track, drop: Drop) => {
     setSelectedTrackId(t.id)
+    // Move the trim region to the previewed drop so manual fine-tuning starts
+    // from the drop the user is actually listening to. Also mark the seed key
+    // as consumed so the best-drop seeding doesn't overwrite this range when
+    // the selected track changes.
+    setPrevDropSeedKey(`${t.id}:${t.analysis ? "a" : "u"}`)
+    setDropStart(drop.start_s)
+    setDropEnd(drop.end_s)
     setPreviewingKey(`${t.id}:${drop.start_s.toFixed(2)}`)
     setPlayRequest({
       trackId: t.id,
@@ -376,7 +441,14 @@ export default function App() {
         </button>
       </nav>
 
-      <main className="flex min-h-0 w-full max-w-full min-w-0 flex-1 flex-col overflow-hidden lg:grid lg:grid-cols-[minmax(0,260px)_minmax(0,1fr)_minmax(0,360px)]">
+      <main
+        className="flex min-h-0 w-full max-w-full min-w-0 flex-1 flex-col overflow-hidden lg:grid"
+        style={{
+          // Only applies when the lg: grid display kicks in; the mobile flex
+          // layout ignores grid-template-columns entirely.
+          gridTemplateColumns: `minmax(0,${colWidths.left}px) 5px minmax(0,1fr) 5px minmax(0,${colWidths.right}px)`,
+        }}
+      >
         <aside className="hidden min-h-0 min-w-0 flex-col overflow-hidden border-r border-border/60 bg-card/20 lg:flex">
           <div className="flex items-center justify-between px-4 py-3">
             <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-widest text-primary/80">
@@ -390,6 +462,14 @@ export default function App() {
           <Separator className="bg-border/40" />
           <div className="min-h-0 flex-1">{trackListEl}</div>
         </aside>
+
+        <div
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Resize tracks column"
+          onPointerDown={startColumnDrag("left")}
+          className="hidden cursor-col-resize touch-none bg-border/40 transition-colors hover:bg-primary/60 active:bg-primary lg:block"
+        />
 
         <section
           className={cn(
@@ -470,9 +550,42 @@ export default function App() {
 
           <Card className="border-border/60 bg-card/40 backdrop-blur">
             <CardHeader className="pb-2">
-              <CardTitle className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-widest text-primary/80">
-                <Waves className="h-3.5 w-3.5" /> Timeline
-              </CardTitle>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <CardTitle className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-widest text-primary/80">
+                  <Waves className="h-3.5 w-3.5" /> Timeline
+                </CardTitle>
+                {selectedTrack?.analysis && dropEnd > dropStart && (
+                  <div className="flex items-center gap-2.5">
+                    <span className="font-mono text-[11px] tabular-nums text-muted-foreground">
+                      {formatDuration(dropStart)}–{formatDuration(dropEnd)} ·{" "}
+                      {(dropEnd - dropStart).toFixed(1)}s
+                    </span>
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      className="h-7 px-2.5 text-xs"
+                      title="Add the trimmed selection (drag the green/red markers to adjust) as a clip"
+                      onClick={() => {
+                        if (!selectedTrack?.analysis) return
+                        const kick = (selectedTrack.analysis.drops ?? []).find(
+                          (d) =>
+                            d.kick_s != null &&
+                            d.kick_s >= dropStart &&
+                            d.kick_s <= dropEnd,
+                        )?.kick_s
+                        handleAdd(selectedTrack, {
+                          start_s: dropStart,
+                          end_s: dropEnd,
+                          kick_s: kick,
+                          score: 0,
+                        })
+                      }}
+                    >
+                      <Plus className="h-3.5 w-3.5" /> Add selection
+                    </Button>
+                  </div>
+                )}
+              </div>
             </CardHeader>
             <CardContent>
               {selectedTrack ? (
@@ -482,6 +595,18 @@ export default function App() {
                   dropStart={dropStart}
                   dropEnd={dropEnd}
                   onChange={({ dropStart: s, dropEnd: e }) => {
+                    // Audition the edit: start-handle moves play from the new
+                    // start; end-handle moves play the last ~3s into the cut
+                    // so the user hears exactly where the clip now ends.
+                    if (selectedTrack) {
+                      const startMoved = Math.abs(s - dropStart) > 0.01
+                      setPlayRequest({
+                        trackId: selectedTrack.id,
+                        time: startMoved ? s : Math.max(s, e - 3),
+                        endTime: e,
+                        key: Date.now(),
+                      })
+                    }
                     setDropStart(s)
                     setDropEnd(e)
                   }}
@@ -498,6 +623,14 @@ export default function App() {
             </CardContent>
           </Card>
         </section>
+
+        <div
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Resize mix editor column"
+          onPointerDown={startColumnDrag("right")}
+          className="hidden cursor-col-resize touch-none bg-border/40 transition-colors hover:bg-primary/60 active:bg-primary lg:block"
+        />
 
         <aside
           className={cn(

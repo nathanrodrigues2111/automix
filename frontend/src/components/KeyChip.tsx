@@ -1,4 +1,5 @@
 import { camelotColors } from "@/lib/camelot"
+import { useEffectiveTheme } from "@/lib/theme"
 import { cn } from "@/lib/utils"
 
 interface KeyChipProps {
@@ -7,7 +8,8 @@ interface KeyChipProps {
 }
 
 export function KeyChip({ keyCamelot, className }: KeyChipProps) {
-  const colors = camelotColors(keyCamelot)
+  const theme = useEffectiveTheme()
+  const colors = camelotColors(keyCamelot, theme)
   if (!colors || !keyCamelot) return null
   return (
     <span

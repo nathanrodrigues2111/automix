@@ -1,38 +1,29 @@
 import { useEffect, useState } from "react"
-import { Download, Loader2 } from "lucide-react"
+import { Download, FlaskConical, Loader2, X } from "lucide-react"
 import { Button } from "@/components/ui/button"
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog"
-import { Progress } from "@/components/ui/progress"
 import { useDownloadModels, useModelsStatus } from "@/api/client"
 import type { ProgressMap } from "@/hooks/useProgressSocket"
 import { formatBytes } from "@/lib/format"
 
 const MODELS_JOB_ID = "models"
+const DISMISS_KEY = "automix.liteModeBannerDismissed"
 
-interface ModelDownloadDialogProps {
+interface ModelStatusBannerProps {
   progress: ProgressMap
 }
 
-export function ModelDownloadDialog({ progress }: ModelDownloadDialogProps) {
-  const status = useModelsStatus({ refetchInterval: 5000 })
+/**
+ * Non-blocking notice that the optional allin1/demucs model weights are not
+ * installed. Analysis works fine via the built-in librosa fallback, so this
+ * never opens modally — it is a small dismissible banner with an optional
+ * "Download models" action.
+ */
+export function ModelStatusBanner({ progress }: ModelStatusBannerProps) {
+  const [dismissed, setDismissed] = useState(
+    () => localStorage.getItem(DISMISS_KEY) === "1",
+  )
+  const status = useModelsStatus()
   const download = useDownloadModels()
-  const [dismissed, setDismissed] = useState(false)
-
-  const needsDownload =
-    !!status.data &&
-    (status.data.allin1 !== "ready" || status.data.demucs !== "ready")
-  const downloading =
-    !!status.data &&
-    (status.data.allin1 === "downloading" ||
-      status.data.demucs === "downloading")
-  const open = !!status.data && needsDownload && !dismissed
 
   const p = progress[MODELS_JOB_ID]
 
@@ -40,81 +31,77 @@ export function ModelDownloadDialog({ progress }: ModelDownloadDialogProps) {
     if (p?.done) {
       status.refetch()
     }
-  }, [p?.done, status])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [p?.done])
 
-  if (!status.data) return null
+  const needsDownload =
+    !!status.data &&
+    (status.data.allin1 !== "ready" || status.data.demucs !== "ready")
+  const downloading =
+    (!!status.data &&
+      (status.data.allin1 === "downloading" ||
+        status.data.demucs === "downloading")) ||
+    (!!p && !p.done)
+  // "unavailable" = the [ml] python packages aren't installed at all, so a
+  // weight download can't work — explain instead of offering a dead button.
+  const canDownload =
+    !!status.data &&
+    (status.data.allin1 === "missing" || status.data.demucs === "missing")
+
+  if (!status.data || !needsDownload || dismissed) return null
+
+  const dismiss = () => {
+    localStorage.setItem(DISMISS_KEY, "1")
+    setDismissed(true)
+  }
 
   return (
-    <Dialog open={open} onOpenChange={(o) => !o && setDismissed(true)}>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>Model weights required</DialogTitle>
-          <DialogDescription>
-            Automix needs to download <code>allin1</code> and <code>demucs</code>{" "}
-            model weights before it can analyse tracks. This happens once.
-          </DialogDescription>
-        </DialogHeader>
-
-        <div className="space-y-3">
-          <ModelRow label="allin1" state={status.data.allin1} />
-          <ModelRow label="demucs" state={status.data.demucs} />
-
-          {(downloading || p) && (
-            <div className="space-y-1.5">
-              <Progress value={p?.percent ?? 0} />
-              <div className="flex justify-between text-xs text-muted-foreground">
-                <span>{p?.message ?? "Preparing"}</span>
-                <span>
-                  {formatBytes(status.data.downloaded_bytes)} /{" "}
-                  {formatBytes(status.data.total_bytes)}
-                </span>
-              </div>
-            </div>
-          )}
-        </div>
-
-        <DialogFooter>
-          <Button variant="outline" onClick={() => setDismissed(true)}>
-            Later
-          </Button>
-          <Button
-            disabled={downloading || download.isPending}
-            onClick={() => download.mutate()}
-          >
-            {downloading || download.isPending ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
-              <Download className="h-4 w-4" />
-            )}
-            Download now
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  )
-}
-
-function ModelRow({
-  label,
-  state,
-}: {
-  label: string
-  state: "ready" | "missing" | "downloading"
-}) {
-  return (
-    <div className="flex items-center justify-between text-sm">
-      <code className="rounded bg-muted px-2 py-0.5 text-xs">{label}</code>
-      <span
-        className={
-          state === "ready"
-            ? "text-emerald-400"
-            : state === "downloading"
-              ? "text-amber-400"
-              : "text-muted-foreground"
-        }
-      >
-        {state}
+    <div
+      role="status"
+      className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-amber-500/20 bg-amber-500/10 px-4 py-1.5 text-xs text-amber-800 dark:text-amber-200"
+    >
+      <span className="flex shrink-0 items-center gap-1.5 font-medium uppercase tracking-wider">
+        <FlaskConical className="h-3.5 w-3.5" /> Lite analysis mode
       </span>
+      <span className="min-w-0 flex-1 truncate text-amber-800/80 dark:text-amber-200/70">
+        {downloading
+          ? `Downloading model weights — ${p?.message ?? "starting"} (${formatBytes(
+              status.data.downloaded_bytes,
+            )} / ${formatBytes(status.data.total_bytes)})`
+          : canDownload
+            ? "Built-in analysis is active. Optional allin1/demucs weights (~2 GB) improve stem separation."
+            : "Built-in analysis is active. The optional neural stack (allin1/demucs, ~2-3 GB, GPU recommended) isn't installed — enable it with: pip install -e \"backend[ml]\""}
+      </span>
+      {!downloading && canDownload && (
+        <Button
+          variant="ghost"
+          size="sm"
+          disabled={download.isPending}
+          onClick={() => download.mutate()}
+          className="h-6 shrink-0 px-2 text-[11px] text-amber-800 hover:bg-amber-500/20 hover:text-amber-900 dark:text-amber-200 dark:hover:text-amber-100"
+        >
+          {download.isPending ? (
+            <Loader2 className="h-3 w-3 animate-spin" />
+          ) : (
+            <Download className="h-3 w-3" />
+          )}
+          Download models
+        </Button>
+      )}
+      {downloading && (
+        <span className="flex shrink-0 items-center gap-1.5 tabular-nums text-amber-800/80 dark:text-amber-200/80">
+          <Loader2 className="h-3 w-3 animate-spin" />
+          {(p?.percent ?? 0).toFixed(0)}%
+        </span>
+      )}
+      <button
+        type="button"
+        onClick={dismiss}
+        aria-label="Dismiss lite analysis mode notice"
+        className="rounded p-0.5 text-amber-800/70 transition-colors hover:bg-amber-500/20 hover:text-amber-900 focus-visible:outline-2 focus-visible:outline-amber-600 dark:text-amber-200/60 dark:hover:text-amber-100 dark:focus-visible:outline-amber-300"
+      >
+        <X className="h-3.5 w-3.5" />
+      </button>
     </div>
   )
 }

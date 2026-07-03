@@ -1,19 +1,35 @@
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { toast } from "sonner"
-import { Disc3, ListMusic, MousePointerClick, Sliders, Waves } from "lucide-react"
+import {
+  Disc3,
+  ListMusic,
+  Monitor,
+  Moon,
+  MousePointerClick,
+  Repeat,
+  Settings2,
+  Sliders,
+  Sun,
+  Waves,
+} from "lucide-react"
+import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Separator } from "@/components/ui/separator"
+import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet"
+import { AutomixPanel } from "@/components/AutomixPanel"
 import { TrackList } from "@/components/TrackList"
 import { Timeline } from "@/components/Timeline"
 import { VideoPreview } from "@/components/VideoPreview"
 import { MixEditor, type EditorClip } from "@/components/MixEditor"
-import { ModelDownloadDialog } from "@/components/ModelDownloadDialog"
+import { ModelStatusBanner } from "@/components/ModelDownloadDialog"
 import { ProjectManager } from "@/components/ProjectManager"
 import { RenderDialog } from "@/components/RenderDialog"
+import { SettingsDialog } from "@/components/SettingsDialog"
 import { useTracks } from "@/api/client"
 import type { Drop, Project, RenderConfig, Track } from "@/api/types"
 import { useProgressSocket } from "@/hooks/useProgressSocket"
-import { formatTrackTitle } from "@/lib/format"
+import { displayTitle } from "@/lib/format"
+import { setThemePref, useThemePref, type ThemePref } from "@/lib/theme"
 import { cn } from "@/lib/utils"
 
 export interface PlayRequest {
@@ -28,7 +44,7 @@ export interface SeekRequest {
   key: number
 }
 
-type ActiveTab = "tracks" | "preview" | "mix"
+type ActiveTab = "preview" | "mix"
 
 const DEFAULT_CONFIG: Omit<RenderConfig, "clips"> = {
   target_bpm: 0, // ignored when no_time_stretch is true
@@ -39,11 +55,53 @@ const DEFAULT_CONFIG: Omit<RenderConfig, "clips"> = {
   snap_to_downbeat: true,
   hard_cut: false,
   no_time_stretch: true, // EDM-Papa style: each clip at its native BPM
+  brand_overlay: true, // EDMPAPA black bars + logo
+  show_titles: true, // per-track title overlay
   harmonic_pitch_shift_max_semitones: 0, // don't pitch-shift either
 }
 
 function uid(): string {
   return `c_${Math.random().toString(36).slice(2, 10)}`
+}
+
+const THEME_CYCLE: Record<ThemePref, ThemePref> = {
+  system: "light",
+  light: "dark",
+  dark: "system",
+}
+
+function ThemeToggle() {
+  const pref = useThemePref()
+  const next = THEME_CYCLE[pref]
+  const Icon = pref === "system" ? Monitor : pref === "light" ? Sun : Moon
+  return (
+    <Button
+      variant="ghost"
+      size="icon"
+      aria-label={`Theme: ${pref} — switch to ${next}`}
+      title={`Theme: ${pref} (click for ${next})`}
+      onClick={() => setThemePref(next)}
+      className="h-8 w-8 text-muted-foreground hover:text-foreground"
+    >
+      <Icon className="h-4 w-4" />
+    </Button>
+  )
+}
+
+const SETTINGS_KEY = "automix.settings.v1"
+
+interface StoredSettings {
+  config?: Partial<Omit<RenderConfig, "clips">>
+  loopPreviews?: boolean
+}
+
+function loadStoredSettings(): StoredSettings {
+  try {
+    const raw = localStorage.getItem(SETTINGS_KEY)
+    return raw ? (JSON.parse(raw) as StoredSettings) : {}
+  } catch {
+    return {}
+  }
 }
 
 export default function App() {
@@ -56,14 +114,47 @@ export default function App() {
   const [currentTime, setCurrentTime] = useState(0)
 
   const [clips, setClips] = useState<EditorClip[]>([])
-  const [config, setConfig] =
-    useState<Omit<RenderConfig, "clips">>(DEFAULT_CONFIG)
+  const [config, setConfig] = useState<Omit<RenderConfig, "clips">>(() => ({
+    ...DEFAULT_CONFIG,
+    ...loadStoredSettings().config,
+  }))
+  const [loopPreviews, setLoopPreviews] = useState<boolean>(
+    () => loadStoredSettings().loopPreviews ?? true,
+  )
+
+  // Persist tuning settings across reloads.
+  useEffect(() => {
+    try {
+      localStorage.setItem(
+        SETTINGS_KEY,
+        JSON.stringify({ config, loopPreviews } satisfies StoredSettings),
+      )
+    } catch {
+      // storage unavailable — settings just won't persist
+    }
+  }, [config, loopPreviews])
 
   const [projectDialog, setProjectDialog] = useState<"save" | "load" | null>(
     null,
   )
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const [tracksDrawerOpen, setTracksDrawerOpen] = useState(false)
+  const drawerTouchRef = useRef<{ x: number; y: number } | null>(null)
+
+  // The tracks drawer is a mobile-only surface; if the viewport grows past
+  // the lg breakpoint while it's open, its overlay would sit on top of the
+  // desktop 3-column layout — close it automatically.
+  useEffect(() => {
+    const mq = window.matchMedia("(min-width: 1024px)")
+    const onChange = () => {
+      if (mq.matches) setTracksDrawerOpen(false)
+    }
+    onChange()
+    mq.addEventListener("change", onChange)
+    return () => mq.removeEventListener("change", onChange)
+  }, [])
   const [renderMode, setRenderMode] = useState<"preview" | "full" | null>(null)
-  const [activeTab, setActiveTab] = useState<ActiveTab>("tracks")
+  const [activeTab, setActiveTab] = useState<ActiveTab>("preview")
   const [playRequest, setPlayRequest] = useState<PlayRequest | null>(null)
   const [seekRequest, setSeekRequest] = useState<SeekRequest | null>(null)
   const [pauseRequestKey, setPauseRequestKey] = useState<number | undefined>(
@@ -87,15 +178,18 @@ export default function App() {
   }, [clips, trackById])
   const selectedTrack = selectedTrackId ? trackById[selectedTrackId] : null
 
-  useEffect(() => {
-    if (!selectedTrack?.analysis) {
-      setDropStart(0)
-      setDropEnd(0)
-      return
-    }
-    setDropStart(selectedTrack.analysis.drop_start_s)
-    setDropEnd(selectedTrack.analysis.drop_end_s)
-  }, [selectedTrack?.id, selectedTrack?.analysis])
+  // Seed the editable drop range from the selected track's analysis. Uses the
+  // "adjust state during render" pattern instead of an effect so switching
+  // tracks doesn't cascade an extra render.
+  const dropSeedKey = selectedTrack
+    ? `${selectedTrack.id}:${selectedTrack.analysis ? "a" : "u"}`
+    : null
+  const [prevDropSeedKey, setPrevDropSeedKey] = useState<string | null>(null)
+  if (dropSeedKey !== prevDropSeedKey) {
+    setPrevDropSeedKey(dropSeedKey)
+    setDropStart(selectedTrack?.analysis?.drop_start_s ?? 0)
+    setDropEnd(selectedTrack?.analysis?.drop_end_s ?? 0)
+  }
 
   const handlePreviewDrop = (t: Track, drop: Drop) => {
     setSelectedTrackId(t.id)
@@ -107,6 +201,7 @@ export default function App() {
       key: Date.now(),
     })
     setActiveTab("preview")
+    setTracksDrawerOpen(false) // reveal the preview so the loop starts visibly
   }
 
   const handlePausePreview = () => {
@@ -152,6 +247,9 @@ export default function App() {
         kick_s,
       },
     ])
+    // On mobile, adding from the tracks drawer returns you to the preview.
+    setTracksDrawerOpen(false)
+    setActiveTab("preview")
   }
 
   const renderConfig: RenderConfig = useMemo(
@@ -165,21 +263,43 @@ export default function App() {
     [clips, config],
   )
 
+  const clipBpms = useMemo(
+    () =>
+      clips
+        .map((c) => trackById[c.track_id]?.analysis?.bpm)
+        .filter((v): v is number => typeof v === "number"),
+    [clips, trackById],
+  )
+
   const handleLoadProject = (p: Project) => {
-    const next = p.config
-    setConfig({
-      target_bpm: next.target_bpm,
-      crossfade_bars: next.crossfade_bars,
-      loudness_lufs: next.loudness_lufs,
-      use_stem_crossfade: next.use_stem_crossfade,
-      harmonic_pitch_shift_max_semitones:
-        next.harmonic_pitch_shift_max_semitones,
-    })
-    setClips(next.clips.map((c) => ({ ...c, uid: uid() })))
+    // Preserve every config field the project carries; fall back to defaults
+    // for anything missing (older projects may predate newer options).
+    const { clips: loadedClips, ...loadedConfig } = p.config
+    const defined = Object.fromEntries(
+      Object.entries(loadedConfig).filter(([, v]) => v !== undefined && v !== null),
+    ) as Partial<Omit<RenderConfig, "clips">>
+    setConfig({ ...DEFAULT_CONFIG, ...defined })
+    setClips(loadedClips.map((c) => ({ ...c, uid: uid() })))
   }
 
+  // Shared between the desktop sidebar and the mobile slide-in drawer.
+  const trackListEl = (
+    <TrackList
+      progress={progress}
+      selectedId={selectedTrackId}
+      onSelect={(t) => setSelectedTrackId(t.id)}
+      onAdd={handleAdd}
+      onPreviewDrop={handlePreviewDrop}
+      onPausePreview={handlePausePreview}
+      playingKey={videoIsPlaying ? previewingKey : null}
+      addedKeys={addedKeys}
+      referenceBpm={lastClipBpm}
+    />
+  )
+  const trackCount = (tracks.data ?? []).length
+
   return (
-    <div className="dark flex h-full flex-col bg-background text-foreground">
+    <div className="flex h-full flex-col bg-background text-foreground">
       <header className="flex items-center justify-between border-b border-border/60 bg-gradient-to-b from-background to-background/60 px-6 py-3 backdrop-blur">
         <div className="flex items-center gap-3">
           <div className="flex h-8 w-8 items-center justify-center rounded-md bg-primary/15 ring-1 ring-primary/30">
@@ -194,82 +314,129 @@ export default function App() {
             </span>
           </div>
         </div>
-        <div className="flex items-center gap-2 text-[10px] uppercase tracking-wider text-muted-foreground">
-          <span className="flex items-center gap-1.5">
+        <div className="flex items-center gap-1.5">
+          <span
+            className="mr-1.5 flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wider text-muted-foreground"
+            title="Everything runs on this machine"
+          >
             <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 shadow-[0_0_8px_currentColor]" />
             local
           </span>
+          <ThemeToggle />
+          <Button
+            variant="ghost"
+            size="icon"
+            aria-label="Open settings"
+            title="Settings"
+            onClick={() => setSettingsOpen(true)}
+            className="h-8 w-8 text-muted-foreground hover:text-foreground"
+          >
+            <Settings2 className="h-4 w-4" />
+          </Button>
         </div>
       </header>
 
-      <nav className="grid grid-cols-3 gap-1 border-b border-border/60 bg-card/30 p-1.5 lg:hidden">
-        {(["tracks", "preview", "mix"] as const).map((tab) => (
+      <ModelStatusBanner progress={progress} />
+
+      <nav
+        className="grid grid-cols-3 gap-1 border-b border-border/60 bg-card/30 p-1.5 lg:hidden"
+        aria-label="Sections"
+      >
+        {(
+          [
+            ["preview", "Auto-Mix"],
+            ["mix", "Mix Editor"],
+          ] as const
+        ).map(([tab, label], i) => (
           <button
             key={tab}
             onClick={() => setActiveTab(tab)}
+            aria-current={activeTab === tab ? "true" : undefined}
             className={cn(
-              "rounded-md px-3 py-1.5 text-xs font-medium uppercase tracking-wider transition-colors",
+              "rounded-md px-3 py-2 text-xs font-medium uppercase tracking-wider transition-colors focus-visible:outline-2 focus-visible:outline-ring",
+              i === 1 && "order-3",
               activeTab === tab
-                ? "bg-primary/15 text-primary ring-1 ring-primary/30"
+                ? "bg-primary/10 text-primary ring-1 ring-primary/40"
                 : "text-muted-foreground hover:bg-accent/40 hover:text-foreground",
             )}
           >
-            {tab === "mix" ? "Mix Editor" : tab}
+            {label}
           </button>
         ))}
+        <button
+          onClick={() => setTracksDrawerOpen(true)}
+          aria-haspopup="dialog"
+          aria-expanded={tracksDrawerOpen}
+          className="order-2 flex items-center justify-center gap-1.5 rounded-md px-3 py-2 text-xs font-medium uppercase tracking-wider text-muted-foreground transition-colors hover:bg-accent/40 hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring"
+        >
+          Tracks
+          <span className="rounded-md bg-secondary/60 px-1.5 py-px text-[11px] tabular-nums">
+            {trackCount}
+          </span>
+        </button>
       </nav>
 
       <main className="flex min-h-0 w-full max-w-full min-w-0 flex-1 flex-col overflow-hidden lg:grid lg:grid-cols-[minmax(0,260px)_minmax(0,1fr)_minmax(0,360px)]">
-        <aside
-          className={cn(
-            "min-h-0 min-w-0 flex-col overflow-hidden border-border/60 bg-card/20 lg:flex lg:border-r",
-            activeTab === "tracks" ? "flex flex-1" : "hidden",
-          )}
-        >
+        <aside className="hidden min-h-0 min-w-0 flex-col overflow-hidden border-r border-border/60 bg-card/20 lg:flex">
           <div className="flex items-center justify-between px-4 py-3">
-            <div className="flex items-center gap-2 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+            <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-widest text-primary/80">
               <ListMusic className="h-3.5 w-3.5" />
               Tracks
             </div>
-            <span className="rounded-md bg-secondary/50 px-1.5 py-0.5 text-[10px] tabular-nums text-muted-foreground">
-              {(tracks.data ?? []).length}
+            <span className="rounded-md bg-secondary/50 px-1.5 py-0.5 text-[11px] tabular-nums text-muted-foreground">
+              {trackCount}
             </span>
           </div>
           <Separator className="bg-border/40" />
-          <div className="min-h-0 flex-1">
-            <TrackList
-              progress={progress}
-              selectedId={selectedTrackId}
-              onSelect={(t) => setSelectedTrackId(t.id)}
-              onAdd={handleAdd}
-              onPreviewDrop={handlePreviewDrop}
-              onPausePreview={handlePausePreview}
-              playingKey={videoIsPlaying ? previewingKey : null}
-              addedKeys={addedKeys}
-              referenceBpm={lastClipBpm}
-            />
-          </div>
+          <div className="min-h-0 flex-1">{trackListEl}</div>
         </aside>
 
         <section
           className={cn(
-            "min-h-0 min-w-0 flex-col gap-3 overflow-y-auto overflow-x-hidden p-4 lg:flex",
+            // *:shrink-0 — the cards use overflow-hidden, which zeroes their
+            // automatic flex minimum; without it they get squashed/clipped to
+            // fit the viewport instead of letting this column scroll.
+            "min-h-0 min-w-0 flex-col gap-3 overflow-y-auto overflow-x-hidden p-4 *:shrink-0 lg:flex",
             activeTab === "preview" ? "flex flex-1" : "hidden",
           )}
         >
+          <AutomixPanel progress={progress} />
+
           <Card className="overflow-hidden border-border/60 bg-card/40 backdrop-blur">
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="flex items-center gap-2 text-xs font-medium uppercase tracking-wider text-muted-foreground">
+              <CardTitle className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-widest text-primary/80">
                 <Disc3 className="h-3.5 w-3.5" /> Preview
               </CardTitle>
-              {selectedTrack && (
-                <span
-                  className="truncate text-xs text-muted-foreground"
-                  title={selectedTrack.filename}
+              <div className="flex min-w-0 items-center gap-1.5">
+                {selectedTrack && (
+                  <span
+                    className="min-w-0 truncate text-xs text-muted-foreground"
+                    title={selectedTrack.filename}
+                  >
+                    {displayTitle(selectedTrack)}
+                  </span>
+                )}
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  aria-pressed={loopPreviews}
+                  aria-label="Loop drop previews"
+                  title={
+                    loopPreviews
+                      ? "Drop previews loop — click to play through instead"
+                      : "Drop previews play through — click to loop"
+                  }
+                  onClick={() => setLoopPreviews((v) => !v)}
+                  className={cn(
+                    "h-7 w-7 shrink-0",
+                    loopPreviews
+                      ? "bg-primary/15 text-primary ring-1 ring-primary/30 hover:bg-primary/25 hover:text-primary"
+                      : "text-muted-foreground hover:text-foreground",
+                  )}
                 >
-                  {formatTrackTitle(selectedTrack.filename)}
-                </span>
-              )}
+                  <Repeat className="h-3.5 w-3.5" />
+                </Button>
+              </div>
             </CardHeader>
             <CardContent>
               {selectedTrack ? (
@@ -284,15 +451,17 @@ export default function App() {
                   seekRequest={seekRequest}
                   onTimeUpdate={setCurrentTime}
                   onPlayingChange={setVideoIsPlaying}
+                  loop={loopPreviews}
                 />
               ) : (
                 <div className="flex aspect-video w-full flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-border/60 bg-gradient-to-b from-card/40 to-card/10 text-center">
                   <MousePointerClick className="h-6 w-6 text-muted-foreground/60" />
                   <div className="text-sm text-muted-foreground">
-                    Select a track from the left panel
+                    Select a track to preview it here
                   </div>
-                  <div className="text-xs text-muted-foreground/70">
-                    Then mark its drop and add it to the mix
+                  <div className="max-w-xs px-4 text-xs text-muted-foreground/70">
+                    Pick one from the Tracks list, or paste a YouTube playlist
+                    above to get started
                   </div>
                 </div>
               )}
@@ -301,7 +470,7 @@ export default function App() {
 
           <Card className="border-border/60 bg-card/40 backdrop-blur">
             <CardHeader className="pb-2">
-              <CardTitle className="flex items-center gap-2 text-xs font-medium uppercase tracking-wider text-muted-foreground">
+              <CardTitle className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-widest text-primary/80">
                 <Waves className="h-3.5 w-3.5" /> Timeline
               </CardTitle>
             </CardHeader>
@@ -340,8 +509,6 @@ export default function App() {
             tracks={tracks.data ?? []}
             clips={clips}
             setClips={setClips}
-            config={config}
-            setConfig={setConfig}
             onPreview={() => setRenderMode("preview")}
             onRender={() => setRenderMode("full")}
             onSaveProject={() => setProjectDialog("save")}
@@ -350,7 +517,53 @@ export default function App() {
         </aside>
       </main>
 
-      <ModelDownloadDialog progress={progress} />
+      {/* Mobile: tracks browse as a slide-in drawer so the preview keeps its
+          context. Desktop keeps the persistent left sidebar. */}
+      <Sheet open={tracksDrawerOpen} onOpenChange={setTracksDrawerOpen}>
+        <SheetContent
+          side="left"
+          aria-describedby={undefined}
+          onTouchStart={(e) => {
+            drawerTouchRef.current = {
+              x: e.touches[0].clientX,
+              y: e.touches[0].clientY,
+            }
+          }}
+          onTouchEnd={(e) => {
+            const start = drawerTouchRef.current
+            drawerTouchRef.current = null
+            if (!start) return
+            const dx = e.changedTouches[0].clientX - start.x
+            const dy = e.changedTouches[0].clientY - start.y
+            // Swipe left to dismiss.
+            if (dx < -60 && Math.abs(dx) > Math.abs(dy)) {
+              setTracksDrawerOpen(false)
+            }
+          }}
+        >
+          <div className="flex items-center justify-between py-3 pl-4 pr-12">
+            <SheetTitle className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-widest text-primary/80">
+              <ListMusic className="h-3.5 w-3.5" />
+              Tracks
+            </SheetTitle>
+            <span className="rounded-md bg-secondary/50 px-1.5 py-0.5 text-[11px] tabular-nums text-muted-foreground">
+              {trackCount}
+            </span>
+          </div>
+          <Separator className="bg-border/40" />
+          <div className="min-h-0 flex-1">{trackListEl}</div>
+        </SheetContent>
+      </Sheet>
+
+      <SettingsDialog
+        open={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+        config={config}
+        setConfig={setConfig}
+        loopPreviews={loopPreviews}
+        onLoopPreviewsChange={setLoopPreviews}
+        clipBpms={clipBpms}
+      />
       <ProjectManager
         mode={projectDialog}
         onClose={() => setProjectDialog(null)}

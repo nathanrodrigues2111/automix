@@ -6,13 +6,15 @@ import {
   TriangleAlert,
 } from "lucide-react"
 import { Toaster as Sonner } from "sonner"
+import { useEffectiveTheme } from "@/lib/theme"
 
 type ToasterProps = React.ComponentProps<typeof Sonner>
 
 const Toaster = ({ ...props }: ToasterProps) => {
+  const theme = useEffectiveTheme()
   return (
     <Sonner
-      theme="dark"
+      theme={theme}
       className="toaster group"
       icons={{
         success: <CircleCheck className="h-4 w-4" />,

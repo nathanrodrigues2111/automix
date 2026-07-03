@@ -5,6 +5,7 @@ import {
 } from "@tanstack/react-query"
 import type {
   AnalyzeRequest,
+  AutomixRequest,
   JobResponse,
   ModelsStatus,
   Project,
@@ -14,6 +15,7 @@ import type {
   RenderResponse,
   Track,
   WaveformPeaks,
+  YoutubeImportRequest,
 } from "./types"
 
 async function http<T>(input: RequestInfo, init?: RequestInit): Promise<T> {
@@ -73,6 +75,26 @@ export function useRender() {
   return useMutation({
     mutationFn: (body: RenderConfig) =>
       http<RenderResponse>("/api/render", {
+        method: "POST",
+        body: JSON.stringify(body),
+      }),
+  })
+}
+
+export function useYoutubeImport() {
+  return useMutation({
+    mutationFn: (body: YoutubeImportRequest) =>
+      http<JobResponse>("/api/youtube/import", {
+        method: "POST",
+        body: JSON.stringify(body),
+      }),
+  })
+}
+
+export function useAutomix() {
+  return useMutation({
+    mutationFn: (body: AutomixRequest) =>
+      http<JobResponse>("/api/automix", {
         method: "POST",
         body: JSON.stringify(body),
       }),

@@ -18,12 +18,23 @@ export interface CamelotColors {
   border: string
 }
 
-export function camelotColors(key: string | null | undefined): CamelotColors | null {
+export function camelotColors(
+  key: string | null | undefined,
+  scheme: "light" | "dark" = "dark",
+): CamelotColors | null {
   const k = parseCamelot(key)
   if (!k) return null
   const hue = camelotHue(k.number)
   const sat = k.letter === "A" ? 55 : 78
   const lt = k.letter === "A" ? 52 : 62
+  if (scheme === "light") {
+    // Darker text on a soft tint so chips stay readable on light surfaces.
+    return {
+      bg: `hsl(${hue} ${sat}% ${lt}% / 0.14)`,
+      fg: `hsl(${hue} ${Math.min(100, sat + 12)}% ${Math.max(24, lt - 24)}%)`,
+      border: `hsl(${hue} ${sat}% ${lt}% / 0.45)`,
+    }
+  }
   return {
     bg: `hsl(${hue} ${sat}% ${lt}% / 0.18)`,
     fg: `hsl(${hue} ${Math.min(100, sat + 20)}% ${Math.min(85, lt + 28)}%)`,

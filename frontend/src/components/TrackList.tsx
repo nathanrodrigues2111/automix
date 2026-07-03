@@ -7,7 +7,7 @@ import { Progress } from "@/components/ui/progress"
 import { useAnalyze, useTracks } from "@/api/client"
 import type { Drop, Track } from "@/api/types"
 import type { ProgressMap } from "@/hooks/useProgressSocket"
-import { formatDuration, formatTrackTitle } from "@/lib/format"
+import { displayTitle, formatDuration } from "@/lib/format"
 import { cn } from "@/lib/utils"
 import { KeyChip } from "@/components/KeyChip"
 
@@ -83,8 +83,15 @@ export function TrackList({
   })
   if (items.length === 0) {
     return (
-      <div className="p-4 text-sm text-muted-foreground">
-        No MP4s found in <code>videos/</code>
+      <div className="flex h-full flex-col items-center justify-center gap-2 p-6 text-center">
+        <Music className="h-6 w-6 text-muted-foreground/50" />
+        <div className="text-sm font-medium text-muted-foreground">
+          No tracks yet
+        </div>
+        <div className="text-xs leading-relaxed text-muted-foreground/70">
+          Paste a YouTube playlist in the Auto-Mix panel to get started, or
+          drop MP4s into <code className="rounded bg-muted px-1">videos/</code>
+        </div>
       </div>
     )
   }
@@ -100,14 +107,13 @@ export function TrackList({
             <li
               key={t.id}
               className={cn(
-                "group relative flex flex-col gap-1.5 border-l-2 border-transparent px-3 py-2 transition-colors hover:bg-accent/20",
-                selectedId === t.id &&
-                  "border-l-primary bg-primary/5",
+                "group relative flex flex-col gap-2 border-l-2 border-transparent px-3.5 py-2.5 transition-colors hover:bg-accent/20",
+                selectedId === t.id && "border-l-primary bg-primary/10",
               )}
             >
               <button
                 onClick={() => onSelect(t)}
-                className="flex min-w-0 items-start gap-2 text-left"
+                className="flex min-w-0 items-start gap-2 rounded-md text-left focus-visible:outline-2 focus-visible:outline-ring"
               >
                 <Music className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
                 <div className="flex min-w-0 flex-1 flex-col">
@@ -115,11 +121,13 @@ export function TrackList({
                     className="line-clamp-2 break-words text-sm font-medium leading-snug"
                     title={t.filename}
                   >
-                    {formatTrackTitle(t.filename)}
+                    {displayTitle(t)}
                   </div>
-                  <span className="text-[11px] tabular-nums text-muted-foreground">
-                    {formatDuration(t.duration_s)}
-                  </span>
+                  {!t.analysis && (
+                    <span className="text-[11px] tabular-nums text-muted-foreground">
+                      {formatDuration(t.duration_s)}
+                    </span>
+                  )}
                 </div>
               </button>
 
@@ -136,17 +144,17 @@ export function TrackList({
                       ? "warn"
                       : "bad"
                 return (
-                  <div className="flex flex-wrap items-center gap-1">
+                  <div className="flex flex-wrap items-center gap-1.5">
                     <Badge
                       variant="secondary"
                       className={cn(
-                        "font-mono text-[10px] tabular-nums",
+                        "font-mono text-[11px] tabular-nums",
                         bpmCompat === "good" &&
-                          "bg-emerald-500/20 text-emerald-300 ring-1 ring-emerald-500/40",
+                          "bg-emerald-500/15 text-emerald-700 ring-1 ring-emerald-500/40 dark:bg-emerald-500/20 dark:text-emerald-300",
                         bpmCompat === "warn" &&
-                          "bg-amber-500/20 text-amber-300 ring-1 ring-amber-500/40",
+                          "bg-amber-500/15 text-amber-700 ring-1 ring-amber-500/40 dark:bg-amber-500/20 dark:text-amber-300",
                         bpmCompat === "bad" &&
-                          "bg-rose-500/20 text-rose-300 ring-1 ring-rose-500/40",
+                          "bg-rose-500/15 text-rose-700 ring-1 ring-rose-500/40 dark:bg-rose-500/20 dark:text-rose-300",
                       )}
                       title={
                         referenceBpm
@@ -159,7 +167,13 @@ export function TrackList({
                     <KeyChip keyCamelot={t.analysis.key_camelot} />
                     <Badge
                       variant="outline"
-                      className="text-[10px] tabular-nums text-muted-foreground"
+                      className="border-border/60 font-mono text-[11px] tabular-nums text-muted-foreground"
+                    >
+                      {formatDuration(t.duration_s)}
+                    </Badge>
+                    <Badge
+                      variant="outline"
+                      className="border-border/60 text-[11px] tabular-nums text-muted-foreground"
                     >
                       {t.analysis.lufs.toFixed(1)} LU
                     </Badge>
@@ -231,15 +245,20 @@ export function TrackList({
                             <li
                               key={i}
                               className={cn(
-                                "flex h-9 items-stretch overflow-hidden rounded-md border border-input bg-background shadow-xs transition-colors",
+                                "flex h-9 items-stretch overflow-hidden rounded-lg border transition-colors",
                                 isAdded
                                   ? "border-emerald-500/40 bg-emerald-500/10"
-                                  : "hover:bg-accent/40",
+                                  : "border-border/60 bg-background hover:border-border hover:bg-accent/30",
                               )}
                             >
                               <button
                                 type="button"
-                                className="flex w-9 shrink-0 items-center justify-center border-r border-input text-primary hover:bg-primary/15"
+                                className={cn(
+                                  "flex w-9 shrink-0 items-center justify-center border-r text-primary transition-colors hover:bg-primary/15 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring",
+                                  isAdded
+                                    ? "border-emerald-500/30"
+                                    : "border-border/60",
+                                )}
                                 onClick={() => {
                                   if (isPlayingThis) onPausePreview?.()
                                   else onPreviewDrop?.(t, d)
@@ -263,7 +282,7 @@ export function TrackList({
                               </button>
                               <button
                                 type="button"
-                                className="flex min-w-0 flex-1 items-center justify-between gap-2 px-3 text-left text-xs"
+                                className="flex min-w-0 flex-1 items-center justify-between gap-2 px-3 text-left text-xs focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring"
                                 onClick={() => {
                                   onAdd(t, d)
                                   toast.success(
@@ -271,7 +290,7 @@ export function TrackList({
                                       d.start_s,
                                     )}–${formatDuration(d.end_s)}`,
                                     {
-                                      description: formatTrackTitle(t.filename),
+                                      description: displayTitle(t),
                                     },
                                   )
                                 }}
@@ -279,13 +298,13 @@ export function TrackList({
                               >
                                 <span className="flex shrink-0 items-center gap-1.5 font-medium">
                                   {isAdded ? (
-                                    <Check className="h-3.5 w-3.5 text-emerald-400" />
+                                    <Check className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400" />
                                   ) : (
-                                    <Zap className="h-3.5 w-3.5 text-amber-400" />
+                                    <Zap className="h-3.5 w-3.5 text-amber-500 dark:text-amber-400" />
                                   )}
                                   Drop {i + 1}
                                 </span>
-                                <span className="truncate font-mono tabular-nums text-muted-foreground">
+                                <span className="truncate font-mono text-[11px] tabular-nums text-muted-foreground">
                                   {formatDuration(d.start_s)}–
                                   {formatDuration(d.end_s)}
                                 </span>

@@ -4,6 +4,7 @@ import RegionsPlugin, { type Region } from "wavesurfer.js/dist/plugins/regions.e
 import TimelinePlugin from "wavesurfer.js/dist/plugins/timeline.esm.js"
 import type { Drop, Track } from "@/api/types"
 import { trackVideoUrl } from "@/api/client"
+import { useEffectiveTheme } from "@/lib/theme"
 
 interface TimelineProps {
   track: Track
@@ -32,24 +33,32 @@ export function Timeline({
   const startRegionRef = useRef<Region | null>(null)
   const endRegionRef = useRef<Region | null>(null)
   const onChangeRef = useRef(onChange)
-  onChangeRef.current = onChange
+  useEffect(() => {
+    onChangeRef.current = onChange
+  }, [onChange])
+
+  const theme = useEffectiveTheme()
 
   useEffect(() => {
     if (!containerRef.current) return
 
+    const isDark = theme === "dark"
     const regions = RegionsPlugin.create()
     const timeline = TimelinePlugin.create({
       height: 18,
       timeInterval: 10,
       primaryLabelInterval: 30,
-      style: { fontSize: "10px", color: "rgba(255,255,255,0.5)" },
+      style: {
+        fontSize: "10px",
+        color: isDark ? "rgba(255,255,255,0.5)" : "rgba(24,24,34,0.55)",
+      },
     })
 
     const ws = WaveSurfer.create({
       container: containerRef.current,
       waveColor: "rgba(168, 85, 247, 0.55)",
       progressColor: "rgba(168, 85, 247, 0.95)",
-      cursorColor: "rgba(255,255,255,0.8)",
+      cursorColor: isDark ? "rgba(255,255,255,0.8)" : "rgba(24,24,34,0.8)",
       cursorWidth: 2,
       height: 120,
       barWidth: 2,
@@ -142,7 +151,7 @@ export function Timeline({
       endRegionRef.current = null
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [track.id])
+  }, [track.id, theme])
 
   useEffect(() => {
     const s = startRegionRef.current

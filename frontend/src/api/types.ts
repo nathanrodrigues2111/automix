@@ -26,6 +26,8 @@ export interface TrackAnalysis {
 export interface Track {
   id: string
   filename: string
+  /** Cleaned display title from the backend — prefer over formatTrackTitle(filename). */
+  title?: string
   path: string
   duration_s: number
   size_bytes: number
@@ -70,8 +72,24 @@ export interface RenderConfig {
   snap_to_downbeat?: boolean
   hard_cut?: boolean
   no_time_stretch?: boolean
+  /** EDMPAPA-style black bars + logo overlay on the final render. */
+  brand_overlay?: boolean
+  /** Per-track title overlay on the final render. */
+  show_titles?: boolean
   harmonic_pitch_shift_max_semitones: number
   proxy?: boolean
+}
+
+export interface YoutubeImportRequest {
+  url: string
+  max_tracks?: number | null
+}
+
+export interface AutomixRequest {
+  url?: string | null
+  track_ids?: string[] | null
+  max_tracks?: number | null
+  config?: Partial<Omit<RenderConfig, "clips">>
 }
 
 export interface RenderResponse {
@@ -99,7 +117,7 @@ export interface ProjectCreate {
   config: RenderConfig
 }
 
-export type ModelState = "ready" | "missing" | "downloading"
+export type ModelState = "ready" | "missing" | "downloading" | "unavailable"
 
 export interface ModelsStatus {
   allin1: ModelState

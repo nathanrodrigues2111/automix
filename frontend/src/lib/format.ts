@@ -16,6 +16,16 @@ export function formatTrackTitle(filename: string): string {
     .trim()
 }
 
+/** Preferred display title for a track: the backend-cleaned `title` when
+ *  present, falling back to a cleaned-up filename. */
+export function displayTitle(track: {
+  title?: string | null
+  filename: string
+}): string {
+  const t = track.title?.trim()
+  return t && t.length > 0 ? t : formatTrackTitle(track.filename)
+}
+
 export function formatBytes(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes <= 0) return "0 B"
   const units = ["B", "KB", "MB", "GB", "TB"]

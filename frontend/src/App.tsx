@@ -580,13 +580,6 @@ export default function App() {
           <AutomixPanel progress={progress} variant="header" />
         </div>
         <div className="flex shrink-0 items-center gap-1.5">
-          <span
-            className="mr-1.5 flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wider text-muted-foreground"
-            title="Everything runs on this machine"
-          >
-            <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 shadow-[0_0_8px_currentColor]" />
-            local
-          </span>
           <ThemeToggle />
           <Button
             variant="ghost"

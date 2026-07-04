@@ -1,5 +1,12 @@
 import { useState } from "react"
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
+import {
   CheckCircle2,
   Clapperboard,
   Download,
@@ -44,6 +51,9 @@ export function RenderDialog({
   const render = useRender()
   const cancelJob = useCancelJob()
   const [jobId, setJobId] = useState<string | null>(null)
+  const [resolution, setResolution] = useState<string>(
+    config.resolution ?? "1080p",
+  )
 
   // Reset job state when the dialog closes so reopening starts fresh.
   const handleClose = () => {
@@ -61,7 +71,7 @@ export function RenderDialog({
   const start = () => {
     const payload: RenderConfig = isPreview
       ? { ...config, proxy: true }
-      : config
+      : { ...config, resolution }
     render.mutate(payload, {
       onSuccess: (res) => {
         setJobId(res.job_id)
@@ -93,6 +103,24 @@ export function RenderDialog({
               : `${config.clips.length} clip(s), target ${config.target_bpm > 0 ? config.target_bpm.toFixed(1) + " BPM" : "auto BPM"}, ${config.crossfade_bars} bar crossfade, ${config.loudness_lufs.toFixed(1)} LUFS${isPreview ? " (720p proxy)" : ""}`}
           </DialogDescription>
         </DialogHeader>
+
+        {!jobId && !isPreview && (
+          <div className="flex items-center justify-between gap-3">
+            <span className="text-sm text-muted-foreground">Resolution</span>
+            <Select value={resolution} onValueChange={setResolution}>
+              <SelectTrigger className="h-8 w-40 text-xs">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="480p">480p</SelectItem>
+                <SelectItem value="720p">720p (HD)</SelectItem>
+                <SelectItem value="1080p">1080p (Full HD)</SelectItem>
+                <SelectItem value="1440p">1440p (2K)</SelectItem>
+                <SelectItem value="2160p">2160p (4K)</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+        )}
 
         {jobId && (
           <div className="space-y-2">

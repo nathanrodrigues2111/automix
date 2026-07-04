@@ -263,11 +263,13 @@ def _equal_power_crossfade(a_wav: Path, b_wav: Path, crossfade_s: float, out_wav
         sf.write(str(out_wav), out, sr)
         return
     fade = np.linspace(0, np.pi / 2, n_fade)
-    # Asymmetric blend: the outgoing decays fast (steeper-than-equal-power
-    # curve, ~ -2.5 dB tilt) while the incoming rises early, so the incoming
-    # track's vocal/riser build reads clearly on top of the outgoing tail
-    # instead of fighting it.
-    fade_out = ((np.cos(fade) ** 1.6) * 0.75)[:, None]
+    # Asymmetric blend: the outgoing decays fast while the incoming rises
+    # early, so the incoming vocal/riser reads clearly. The duck factor
+    # RAMPS in with the fade (1.0 -> 0.75) — a constant 0.75 made the
+    # outgoing level step down instantly at fade start, which sounds like
+    # a click/clip at every transition.
+    duck = (1.0 - 0.25 * np.sin(fade))[:, None]
+    fade_out = (np.cos(fade) ** 1.6)[:, None] * duck
     fade_in = (np.sin(fade) ** 0.85)[:, None]
     tail = a[-n_fade:] * fade_out
     head = b[:n_fade] * fade_in
@@ -317,10 +319,10 @@ def _eq_bass_swap_crossfade(
     fout = np.cos(x)[:, None]
     fin = np.sin(x)[:, None]
 
-    # Drums + vocals + other: equal-power crossfade, with the outgoing tail
-    # ~2 dB under the incoming head so the next drop's vocal reads clearly
-    # through the transition (subtle emphasis, not a volume jump).
-    tail = (a_t_d + a_t_v + a_t_o) * fout * 0.79
+    # Drums + vocals + other: equal-power crossfade with a RAMPED duck on
+    # the outgoing tail (a constant factor steps the level at fade start).
+    duck = (1.0 - 0.21 * np.sin(x))[:, None]
+    tail = (a_t_d + a_t_v + a_t_o) * fout * duck
     head = (b_h_d + b_h_o) * fin + b_h_v * fin * 1.12
 
     # Bass: a-bass full until midpoint, b-bass full after — short ramp at the swap point.
@@ -1253,6 +1255,25 @@ def render_mix(
             proxy=proxy, durations=audio_lens,
             intermediate=bool(brand_overlay),
         )
+
+    # Normalize the WHOLE mix once at the end: overlap summing and the
+    # per-clip normalization can leave the final program slightly off
+    # target; this guarantees -14 LUFS / -1.5 dBTP with no clipping.
+    if progress:
+        progress("render", 82.0, "Normalizing final mix")
+    final_normed = work / "final_normed.wav"
+    if proxy:
+        subprocess.run(
+            [
+                "ffmpeg", "-y", "-i", str(final_audio),
+                "-af", f"loudnorm=I={target_lufs}:LRA=11:TP=-1.5",
+                "-ar", "44100", "-ac", "2", str(final_normed),
+            ],
+            check=True, capture_output=True,
+        )
+    else:
+        _loudnorm_two_pass(final_audio, final_normed, target_lufs)
+    final_audio = final_normed
 
     # Gentle tail fade so the mix doesn't stop on a hard cut before the outro.
     outro_s = float(config.get("outro_s", 20.0))

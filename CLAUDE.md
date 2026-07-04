@@ -4,6 +4,15 @@ EDM drop-mix builder for the EDMPAPA YouTube channel: imports tracks from
 YouTube playlists, detects drops, and renders branded beat-matched video
 mixes. Owner: Nathan Rodrigues.
 
+## HARD RULE: no backend edits while jobs run
+
+The backend runs under `uvicorn --reload`. ANY write to a file in
+`backend/` reloads the server and SILENTLY KILLS running downloads,
+analyses, and renders (the UI just freezes on the last progress
+message). This has bitten repeatedly. Before editing anything in
+`backend/`, confirm no import/analysis/render is in flight (check
+`backend/.cache/renders/` mtimes and `videos/imports/*.part`), or ask.
+
 ## Running it
 
 - Backend: FastAPI on :8000 (`backend/`, run with `uv run uvicorn main:app --reload` from `backend/`). Usually already running with hot reload.

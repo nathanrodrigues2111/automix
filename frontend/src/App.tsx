@@ -62,7 +62,7 @@ const TOUR_STEPS: TourStep[] = [
   {
     target: "tracks",
     title: "Your track library",
-    text: "Every imported track with its BPM, key, and detected drops. Hit a drop's play button to audition it, click a drop row to add it to the mix, or run Analyze all after fresh imports. Rename, copy, and batch delete live at the top.",
+    text: "Every imported track with its BPM, key, and detected drops. Full DJ sets work too: paste a tracklist to label every drop with its song name, search by song, and add all drops in one click. Rename, re-analyze, and batch delete live on each row.",
   },
   {
     target: "preview",
@@ -77,7 +77,7 @@ const TOUR_STEPS: TourStep[] = [
   {
     target: "mixer",
     title: "Mix editor",
-    text: "Your mix, clip by clip. Drag to reorder, Auto-order for harmonic (Camelot) flow, Preview to hear the whole mix instantly in the browser, and Render for the final MP4 in videos/exports.",
+    text: "Your mix, clip by clip. Drag to reorder, Auto-order for harmonic (Camelot) flow, Preview to hear the whole mix instantly in the browser, and Render for the final MP4 (pick 480p to 4K) in videos/exports.",
   },
   {
     title: "Shortcuts",

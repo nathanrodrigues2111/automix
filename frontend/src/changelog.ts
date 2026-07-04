@@ -9,6 +9,19 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "0.5.0",
+    date: "2026-07-04",
+    title: "Full DJ sets & faster renders",
+    items: [
+      "Hour-long sets detect every drop (cap scales with duration)",
+      "Paste or auto-fetch a tracklist to label drops with song names; one drop per song",
+      "Search matches drop titles and filters a set down to the hit",
+      "Add all drops in one click; re-analyze button on any track",
+      "Renders run clips in parallel with fused encodes (much faster), plus a resolution picker (480p to 4K)",
+      "Hosted app on GitHub Pages talks to your local backend; accent colors, credits, and privacy notes in Settings",
+    ],
+  },
+  {
     version: "0.4.0",
     date: "2026-07-04",
     title: "Intro, outro & job control",

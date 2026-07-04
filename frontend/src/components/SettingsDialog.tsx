@@ -28,6 +28,7 @@ import { Switch } from "@/components/ui/switch"
 import { cn } from "@/lib/utils"
 import { setThemePref, useThemePref, type ThemePref } from "@/lib/theme"
 import { ACCENTS, isPresetAccent, loadAccent, setAccent } from "@/lib/accent"
+import { defaultApiBase, loadApiBase, setApiBase } from "@/lib/backend"
 import { APP_VERSION, CHANGELOG } from "@/changelog"
 import type { RenderConfig } from "@/api/types"
 
@@ -71,6 +72,7 @@ export function SettingsDialog({
   const nativeBpm = config.no_time_stretch ?? true
   const [accent, setAccentState] = useState<string | null>(() => loadAccent())
   const [changelogOpen, setChangelogOpen] = useState(false)
+  const [apiBase, setApiBaseState] = useState<string>(() => loadApiBase())
   const [legalOpen, setLegalOpen] = useState(false)
 
   return (
@@ -340,6 +342,35 @@ export function SettingsDialog({
               onChange={onLoopPreviewsChange}
             />
           </section>
+          <Separator className="bg-border/50" />
+
+          <section className="space-y-3">
+            <SectionLabel>Connection</SectionLabel>
+            <div className="space-y-2">
+              <Label className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+                Backend URL
+              </Label>
+              <Input
+                value={apiBase}
+                onChange={(e) => setApiBaseState(e.target.value)}
+                onBlur={() => {
+                  const v = apiBase.trim().replace(/\/+$/, "")
+                  if (v === loadApiBase()) return
+                  setApiBase(v || null)
+                  window.location.reload()
+                }}
+                placeholder={defaultApiBase() || "same origin"}
+                spellCheck={false}
+                className="h-8 bg-background/60 font-mono text-xs"
+              />
+              <p className="text-[11px] leading-relaxed text-muted-foreground/80">
+                Where the Automix backend runs. Leave as http://localhost:8000
+                when using the hosted UI with the backend on this computer.
+                Changing it reloads the app.
+              </p>
+            </div>
+          </section>
+
           <Separator className="bg-border/50" />
 
           <section className="space-y-3">

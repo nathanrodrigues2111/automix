@@ -25,8 +25,12 @@ app = FastAPI(title="Automix Backend")
 
 app.add_middleware(
     CORSMiddleware,
+    # The UI may be served from GitHub Pages / Cloudflare Pages while this
+    # backend runs on the user's machine. No cookies are used, so a broad
+    # origin allowance is safe for a localhost-bound service.
     allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
-    allow_credentials=True,
+    allow_origin_regex=r"https://.*\.(github\.io|pages\.dev)",
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )

@@ -31,6 +31,7 @@ import {
   useCancelJob,
   usePlaylistEntries,
   useYoutubeImport,
+  mediaUrl,
 } from "@/api/client"
 import type { PlaylistEntry } from "@/api/types"
 import type { ProgressMap } from "@/hooks/useProgressSocket"
@@ -650,7 +651,7 @@ export function AutomixPanel({ progress, variant = "card" }: AutomixPanelProps) 
               <CheckCircle2 className="h-4 w-4" /> Mix ready
             </div>
             <Player
-              src={`/${outputPath}`}
+              src={mediaUrl(outputPath)}
               title={fileName ?? "Auto-Mix"}
               className="ring-emerald-500/25"
             />
@@ -667,7 +668,7 @@ export function AutomixPanel({ progress, variant = "card" }: AutomixPanelProps) 
                   size="sm"
                   className="bg-primary text-primary-foreground hover:bg-primary/90"
                 >
-                  <a href={`/${outputPath}`} download={fileName ?? true}>
+                  <a href={mediaUrl(outputPath)} download={fileName ?? true}>
                     <Download className="h-3.5 w-3.5" /> Download
                   </a>
                 </Button>

@@ -12,7 +12,7 @@ import {
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Player } from "@/components/Player"
-import { useDeleteMix, useMixes } from "@/api/client"
+import { useDeleteMix, useMixes, mediaUrl } from "@/api/client"
 import type { MixRecord } from "@/api/types"
 import type { ProgressMap } from "@/hooks/useProgressSocket"
 import { formatBytes } from "@/lib/format"
@@ -296,7 +296,7 @@ export function MixesPanel({ progress }: MixesPanelProps) {
                           className="h-8 w-8 shrink-0 text-muted-foreground hover:text-foreground"
                         >
                           <a
-                            href={`/${m.path}`}
+                            href={mediaUrl(m.path)}
                             download={m.filename}
                             title="Download"
                             aria-label={`Download ${m.filename}`}
@@ -331,7 +331,7 @@ export function MixesPanel({ progress }: MixesPanelProps) {
                     {isActive && !selectMode && (
                       <div className="border-t border-border/60 p-2">
                         <Player
-                          src={`/${m.path}`}
+                          src={mediaUrl(m.path)}
                           title={m.filename}
                           autoPlay
                         />

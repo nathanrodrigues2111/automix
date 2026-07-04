@@ -39,12 +39,12 @@ async function updateFavicon(value: string | null): Promise<void> {
   const link = document.querySelector<HTMLLinkElement>("link[rel='icon']")
   if (!link) return
   if (!value) {
-    link.href = "/favicon.svg"
+    link.href = `${import.meta.env.BASE_URL}favicon.svg`
     return
   }
   if (faviconSvg == null) {
     try {
-      faviconSvg = await (await fetch("/favicon.svg")).text()
+      faviconSvg = await (await fetch(`${import.meta.env.BASE_URL}favicon.svg`)).text()
     } catch {
       return
     }

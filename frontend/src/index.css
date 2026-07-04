@@ -10,7 +10,7 @@
 /* Brand title font — same file the renderer burns into the video. */
 @font-face {
   font-family: "Bebas";
-  src: url("/fonts/Bebas-Regular.ttf") format("truetype");
+  src: url("./assets/Bebas-Regular.ttf") format("truetype");
   font-display: swap;
 }
 

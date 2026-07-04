@@ -21,9 +21,10 @@ import type {
   WaveformPeaks,
   YoutubeImportRequest,
 } from "./types"
+import { apiUrl } from "@/lib/backend"
 
-async function http<T>(input: RequestInfo, init?: RequestInit): Promise<T> {
-  const res = await fetch(input, {
+async function http<T>(input: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(apiUrl(input), {
     ...init,
     headers: {
       "Content-Type": "application/json",
@@ -246,5 +247,10 @@ export function useDownloadModels() {
 }
 
 export function trackVideoUrl(trackId: string): string {
-  return `/api/tracks/${trackId}/video`
+  return apiUrl(`/api/tracks/${trackId}/video`)
+}
+
+/** Absolute URL for a backend-served file path like "videos/exports/x.mp4". */
+export function mediaUrl(relPath: string): string {
+  return apiUrl(`/${relPath.replace(/^\/+/, "")}`)
 }

@@ -21,7 +21,7 @@ import {
 } from "@/components/ui/dialog"
 import { Progress } from "@/components/ui/progress"
 import { Player } from "@/components/Player"
-import { useCancelJob, useRender } from "@/api/client"
+import { useCancelJob, useRender, mediaUrl } from "@/api/client"
 import type { RenderConfig } from "@/api/types"
 import type { ProgressMap } from "@/hooks/useProgressSocket"
 
@@ -139,13 +139,13 @@ export function RenderDialog({
                   size="sm"
                   className="h-7 text-xs"
                 >
-                  <a href={`/${outputPath}`} target="_blank" rel="noreferrer">
+                  <a href={mediaUrl(outputPath)} target="_blank" rel="noreferrer">
                     <FolderOpen className="h-3 w-3" /> Open file
                   </a>
                 </Button>
                 <Button asChild size="sm" className="h-7 text-xs">
                   <a
-                    href={`/${outputPath}`}
+                    href={mediaUrl(outputPath)}
                     download={outputPath.split("/").pop() ?? true}
                   >
                     <Download className="h-3 w-3" /> Download
@@ -154,7 +154,7 @@ export function RenderDialog({
               </div>
             </div>
             <Player
-              src={`/${outputPath}`}
+              src={mediaUrl(outputPath)}
               title={outputPath.split("/").pop() ?? "Rendered mix"}
               autoPlay
               className="ring-emerald-500/25"

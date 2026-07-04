@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react"
 import type { ProgressMessage } from "@/api/types"
+import { wsUrl } from "@/lib/backend"
 
 export interface ProgressEntry {
   stage: ProgressMessage["stage"]
@@ -23,8 +24,7 @@ export function useProgressSocket(): ProgressMap {
 
     const connect = () => {
       if (closedRef.current) return
-      const proto = window.location.protocol === "https:" ? "wss:" : "ws:"
-      const url = `${proto}//${window.location.host}/ws/progress`
+      const url = wsUrl("/ws/progress")
       const ws = new WebSocket(url)
       wsRef.current = ws
 

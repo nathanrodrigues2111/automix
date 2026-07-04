@@ -162,7 +162,7 @@ export function VideoPreview({
             player for pixel-true branding. */}
         {!brandOverlay.intro && (
           <img
-            src="/edmpapa.png"
+            src={`${import.meta.env.BASE_URL}edmpapa.png`}
             alt="EDMPAPA"
             className="absolute inset-0 h-full w-full"
           />
@@ -170,7 +170,7 @@ export function VideoPreview({
         {brandOverlay.intro && (
           /* Same screen blend the renderer uses: black stays invisible. */
           <video
-            src="/intro.mp4"
+            src={`${import.meta.env.BASE_URL}intro.mp4`}
             autoPlay
             muted
             playsInline

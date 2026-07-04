@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useId, useRef, useState } from "react"
 import type { RenderClip } from "@/api/types"
+import { apiUrl } from "@/lib/backend"
 import {
   claimPlayback,
   onPlaybackClaimed,
@@ -39,7 +40,7 @@ interface Scheduled {
 const CLIP_REV = "n14"
 
 function clipUrl(c: RenderClip): string {
-  return `/api/tracks/${c.track_id}/clip?start=${c.start_s.toFixed(3)}&end=${(c.end_s ?? c.start_s + 20).toFixed(3)}&v=${CLIP_REV}`
+  return apiUrl(`/api/tracks/${c.track_id}/clip?start=${c.start_s.toFixed(3)}&end=${(c.end_s ?? c.start_s + 20).toFixed(3)}&v=${CLIP_REV}`)
 }
 
 function clipKey(c: RenderClip): string {

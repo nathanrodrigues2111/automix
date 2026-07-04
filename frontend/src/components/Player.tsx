@@ -16,7 +16,11 @@ import {
   DefaultVideoLayout,
   defaultLayoutIcons,
 } from "@vidstack/react/player/layouts/default"
-import { claimPlayback, onPlaybackClaimed } from "@/lib/audioFocus"
+import {
+  claimPlayback,
+  onPlaybackClaimed,
+  registerPlayer,
+} from "@/lib/audioFocus"
 import { useEffectiveTheme } from "@/lib/theme"
 import { cn } from "@/lib/utils"
 
@@ -54,6 +58,9 @@ export function Player({ src, className, ref, onPlay, ...rest }: PlayerProps) {
       }),
     [focusId],
   )
+
+  // Register for global keyboard control (spacebar play/pause in App.tsx).
+  useEffect(() => registerPlayer(focusId, () => innerRef.current), [focusId])
 
   const setRefs = (node: MediaPlayerInstance | null) => {
     innerRef.current = node

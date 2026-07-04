@@ -24,6 +24,8 @@ interface VideoPreviewProps {
   seekRequest?: SeekRequest | null
   onTimeUpdate?: (time: number) => void
   onPlayingChange?: (playing: boolean) => void
+  /** Exposes the underlying player instance (for external transport controls). */
+  onPlayerRef?: (player: MediaPlayerInstance | null) => void
   /** When true (default), drop previews loop back to the drop start on
    *  reaching the drop end instead of pausing. */
   loop?: boolean
@@ -50,6 +52,7 @@ export function VideoPreview({
   seekRequest,
   onTimeUpdate,
   onPlayingChange,
+  onPlayerRef,
   loop = true,
 }: VideoPreviewProps) {
   const playerRef = useRef<MediaPlayerInstance>(null)
@@ -106,7 +109,10 @@ export function VideoPreview({
 
   return (
     <Player
-      ref={playerRef}
+      ref={(node) => {
+        playerRef.current = node
+        onPlayerRef?.(node)
+      }}
       src={trackVideoUrl(track.id)}
       title={displayTitle(track)}
       onPlay={() => onPlayingChange?.(true)}

@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState } from "react"
 import {
   Check,
+  Copy,
   Loader2,
   Music,
   Pause,
+  Pencil,
   Play,
   Plus,
   Sparkles,
@@ -15,7 +17,12 @@ import { useQueryClient } from "@tanstack/react-query"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Progress } from "@/components/ui/progress"
-import { useAnalyze, useDeleteTrack, useTracks } from "@/api/client"
+import {
+  useAnalyze,
+  useDeleteTrack,
+  useRenameTrack,
+  useTracks,
+} from "@/api/client"
 import type { Drop, Track } from "@/api/types"
 import type { ProgressMap } from "@/hooks/useProgressSocket"
 import { displayTitle, formatDuration } from "@/lib/format"
@@ -52,7 +59,39 @@ export function TrackList({
   const tracks = useTracks()
   const analyze = useAnalyze()
   const deleteTrack = useDeleteTrack()
+  const renameTrack = useRenameTrack()
   const [jobByTrack, setJobByTrack] = useState<Record<string, string>>({})
+
+  // Inline title editing.
+  const [editingId, setEditingId] = useState<string | null>(null)
+  const [editValue, setEditValue] = useState("")
+
+  const startEdit = (t: Track) => {
+    setEditingId(t.id)
+    setEditValue(displayTitle(t))
+  }
+
+  const commitEdit = (t: Track) => {
+    const title = editValue.trim()
+    setEditingId(null)
+    if (!title || title === displayTitle(t)) return
+    renameTrack.mutate(
+      { trackId: t.id, title },
+      {
+        onSuccess: () => toast.success("Track renamed", { description: title }),
+        onError: (e) => toast.error(`Rename failed: ${e.message}`),
+      },
+    )
+  }
+
+  const copyTitle = async (t: Track) => {
+    try {
+      await navigator.clipboard.writeText(displayTitle(t))
+      toast.success("Title copied", { description: displayTitle(t) })
+    } catch {
+      toast.error("Could not access the clipboard")
+    }
+  }
 
   // Single-row delete: first click arms the confirm, second click deletes.
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null)
@@ -268,6 +307,23 @@ export function TrackList({
                     tabIndex={-1}
                   />
                 )}
+                {editingId === t.id ? (
+                  <div className="flex min-w-0 flex-1 items-center gap-2">
+                    <Music className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                    <input
+                      autoFocus
+                      value={editValue}
+                      onChange={(e) => setEditValue(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") commitEdit(t)
+                        else if (e.key === "Escape") setEditingId(null)
+                      }}
+                      onBlur={() => commitEdit(t)}
+                      aria-label="Track title"
+                      className="h-7 min-w-0 flex-1 rounded-md border border-border bg-background px-2 text-sm focus-visible:outline-2 focus-visible:outline-ring"
+                    />
+                  </div>
+                ) : (
                 <button
                   onClick={() =>
                     selectMode ? toggleSelected(t.id) : onSelect(t)
@@ -291,6 +347,29 @@ export function TrackList({
                     )}
                   </div>
                 </button>
+                )}
+                {!selectMode && editingId !== t.id && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => copyTitle(t)}
+                      aria-label={`Copy title of ${displayTitle(t)}`}
+                      title="Copy title"
+                      className="-mr-1 flex h-6 shrink-0 items-center rounded-md px-1 text-muted-foreground/60 opacity-0 transition-all hover:bg-accent/60 hover:text-foreground focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-ring group-hover:opacity-100"
+                    >
+                      <Copy className="h-3.5 w-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => startEdit(t)}
+                      aria-label={`Rename ${displayTitle(t)}`}
+                      title="Rename track"
+                      className="-mr-1 flex h-6 shrink-0 items-center rounded-md px-1 text-muted-foreground/60 opacity-0 transition-all hover:bg-accent/60 hover:text-foreground focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-ring group-hover:opacity-100"
+                    >
+                      <Pencil className="h-3.5 w-3.5" />
+                    </button>
+                  </>
+                )}
                 {!selectMode && (
                   <button
                     type="button"

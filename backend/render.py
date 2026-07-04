@@ -218,11 +218,17 @@ def _equal_power_crossfade(a_wav: Path, b_wav: Path, crossfade_s: float, out_wav
         sf.write(str(out_wav), out, sr)
         return
     fade = np.linspace(0, np.pi / 2, n_fade)
-    fade_out = np.cos(fade)[:, None]
+    # Slightly asymmetric blend: the outgoing tail sits ~2 dB under the
+    # incoming head so the next drop's vocal/riser reads clearly through the
+    # transition — a subtle emphasis, not a volume jump.
+    fade_out = (np.cos(fade) * 0.79)[:, None]
     fade_in = np.sin(fade)[:, None]
     tail = a[-n_fade:] * fade_out
     head = b[:n_fade] * fade_in
     mixed = tail + head
+    peak = float(np.max(np.abs(mixed))) if mixed.size else 0.0
+    if peak > 0.999:
+        mixed *= 0.999 / peak
     out = np.concatenate([a[:-n_fade], mixed, b[n_fade:]], axis=0)
     sf.write(str(out_wav), out, sr)
 
@@ -265,9 +271,11 @@ def _eq_bass_swap_crossfade(
     fout = np.cos(x)[:, None]
     fin = np.sin(x)[:, None]
 
-    # Drums + vocals + other: standard equal-power crossfade.
-    tail = a_t_d * fout + a_t_v * fout + a_t_o * fout
-    head = b_h_d * fin + b_h_v * fin + b_h_o * fin
+    # Drums + vocals + other: equal-power crossfade, with the outgoing tail
+    # ~2 dB under the incoming head so the next drop's vocal reads clearly
+    # through the transition (subtle emphasis, not a volume jump).
+    tail = (a_t_d + a_t_v + a_t_o) * fout * 0.79
+    head = (b_h_d + b_h_o) * fin + b_h_v * fin * 1.12
 
     # Bass: a-bass full until midpoint, b-bass full after — short ramp at the swap point.
     n_ch = a_t_b.shape[1]
@@ -283,6 +291,9 @@ def _eq_bass_swap_crossfade(
         bass[half:] = b_h_b[half:]
 
     mixed = tail + head + bass
+    peak = float(np.max(np.abs(mixed))) if mixed.size else 0.0
+    if peak > 0.999:
+        mixed *= 0.999 / peak
     out = np.concatenate([a_full[:-n_fade], mixed, b_full[n_fade:]], axis=0)
     sf.write(str(out_wav), out, sr)
 

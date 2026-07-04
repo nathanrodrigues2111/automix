@@ -116,6 +116,20 @@ export function useDeleteTrack() {
   })
 }
 
+export function useRenameTrack() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ trackId, title }: { trackId: string; title: string }) =>
+      http<{ id: string; title: string }>(`/api/tracks/${trackId}`, {
+        method: "PATCH",
+        body: JSON.stringify({ title }),
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["tracks"] })
+    },
+  })
+}
+
 export function useRefreshTitles() {
   const qc = useQueryClient()
   return useMutation({

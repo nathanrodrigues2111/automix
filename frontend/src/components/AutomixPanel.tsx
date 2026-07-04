@@ -5,6 +5,8 @@ import {
   AlertCircle,
   Check,
   CheckCircle2,
+  ChevronDown,
+  ChevronRight,
   Download,
   Loader2,
   RotateCcw,
@@ -20,6 +22,13 @@ import type { ProgressMap } from "@/hooks/useProgressSocket"
 import { cn } from "@/lib/utils"
 
 type JobKind = "automix" | "import"
+
+interface LogLine {
+  time: string
+  stage: string
+  message: string
+  isError: boolean
+}
 
 const STAGES = [
   { key: "download", label: "Download" },
@@ -44,6 +53,9 @@ export function AutomixPanel({ progress }: AutomixPanelProps) {
   const [maxTracks, setMaxTracks] = useState("")
   const [urlError, setUrlError] = useState<string | null>(null)
   const [job, setJob] = useState<{ id: string; kind: JobKind } | null>(null)
+  const [log, setLog] = useState<LogLine[]>([])
+  const [showLog, setShowLog] = useState(true)
+  const logRef = useRef<HTMLDivElement>(null)
   const notifiedJobRef = useRef<string | null>(null)
   const downloadedJobRef = useRef<string | null>(null)
 
@@ -54,6 +66,30 @@ export function AutomixPanel({ progress }: AutomixPanelProps) {
   const outputPath =
     done && !isError && job?.kind === "automix" ? (p?.output_path ?? null) : null
   const fileName = outputPath ? (outputPath.split("/").pop() ?? outputPath) : null
+
+  // Accumulate every distinct progress message into a job log (the socket
+  // only keeps the latest message per job). Cleared when a new job starts.
+  useEffect(() => {
+    setLog([])
+  }, [job?.id])
+
+  useEffect(() => {
+    if (!job || !p?.message) return
+    const { stage, message } = p
+    const isErr = !!p.done && message.toLowerCase().startsWith("error")
+    setLog((prev) => {
+      const last = prev[prev.length - 1]
+      if (last && last.message === message && last.stage === stage) return prev
+      const time = new Date().toLocaleTimeString([], { hour12: false })
+      return [...prev, { time, stage, message, isError: isErr }]
+    })
+  }, [job, p])
+
+  // Keep the log pinned to the newest line.
+  useEffect(() => {
+    const el = logRef.current
+    if (el) el.scrollTop = el.scrollHeight
+  }, [log.length])
 
   // Tracks land in the library as soon as the download stage finishes — for
   // automix jobs that's well before the render completes, so refresh early.
@@ -318,6 +354,51 @@ export function AutomixPanel({ progress }: AutomixPanelProps) {
             >
               {p?.message || "Starting…"}
             </div>
+            {log.length > 0 && (
+              <div className="space-y-1 border-t border-border/60 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setShowLog((v) => !v)}
+                  aria-expanded={showLog}
+                  className="flex items-center gap-1 text-[11px] font-medium uppercase tracking-wider text-muted-foreground transition-colors hover:text-foreground"
+                >
+                  {showLog ? (
+                    <ChevronDown className="h-3 w-3" />
+                  ) : (
+                    <ChevronRight className="h-3 w-3" />
+                  )}
+                  Log
+                  <span className="font-mono normal-case tabular-nums text-muted-foreground/60">
+                    ({log.length})
+                  </span>
+                </button>
+                {showLog && (
+                  <div
+                    ref={logRef}
+                    className="max-h-40 overflow-y-auto rounded-md border border-border/60 bg-background/60 p-2 font-mono text-[11px] leading-relaxed"
+                  >
+                    {log.map((l, i) => (
+                      <div key={i} className="flex gap-2">
+                        <span className="shrink-0 tabular-nums text-muted-foreground/50">
+                          {l.time}
+                        </span>
+                        <span className="w-16 shrink-0 uppercase text-primary/70">
+                          {l.stage}
+                        </span>
+                        <span
+                          className={cn(
+                            "min-w-0 break-words",
+                            l.isError ? "text-destructive" : "text-muted-foreground",
+                          )}
+                        >
+                          {l.message}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
             {isError && (
               <Button variant="outline" size="sm" onClick={reset} className="h-7 text-xs">
                 <RotateCcw className="h-3 w-3" /> Try again

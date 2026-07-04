@@ -46,6 +46,10 @@ class AnalyzeRequest(BaseModel):
     track_id: str
 
 
+class RenameTrackRequest(BaseModel):
+    title: str
+
+
 class JobResponse(BaseModel):
     job_id: str
 

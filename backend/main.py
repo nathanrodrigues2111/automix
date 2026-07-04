@@ -132,9 +132,13 @@ def _scan_tracks() -> list[dict]:
         meta = db.get_track_meta(fh)
         title = meta["title"] if meta and meta.get("title") else youtube_mod.clean_title(path.stem)
         cached = db.get_analysis(fh)
-        # Backfill: older analyses don't have `drops`. Compute lazily from the
-        # cached WAV (fast — ~1-2s per track on first scan) and persist.
-        if cached is not None and not cached.get("drops"):
+        # Backfill: older analyses miss `drops` or carry drops from an older
+        # detector version. Recompute lazily from the cached WAV (fast —
+        # ~1-2s per track on first scan) and persist.
+        if cached is not None and (
+            not cached.get("drops")
+            or cached.get("drops_version") != analysis_mod.DROPS_VERSION
+        ):
             wav = analysis_mod.WAV_CACHE_DIR / f"{fh}.wav"
             if wav.exists():
                 try:
@@ -144,6 +148,7 @@ def _scan_tracks() -> list[dict]:
                         float(cached.get("bpm", 0.0)),
                     )
                     cached["drops"] = drops
+                    cached["drops_version"] = analysis_mod.DROPS_VERSION
                     db.put_analysis(fh, cached)
                 except Exception:
                     cached["drops"] = []
@@ -421,6 +426,21 @@ def _automix_pipeline(req: schemas.AutomixRequest, progress) -> dict:
         fh = analysis_mod.file_hash(path)
         title = _track_title(path)
         cached = db.get_analysis(fh)
+        # Drops from an older detector version may point at vocal sections —
+        # recompute them before building clips.
+        if cached is not None and cached.get("drops_version") != analysis_mod.DROPS_VERSION:
+            wav = analysis_mod.WAV_CACHE_DIR / f"{fh}.wav"
+            if wav.exists():
+                try:
+                    cached["drops"] = analysis_mod.find_drops(
+                        wav,
+                        [float(d) for d in cached.get("downbeats", [])],
+                        float(cached.get("bpm", 0.0)),
+                    )
+                    cached["drops_version"] = analysis_mod.DROPS_VERSION
+                    db.put_analysis(fh, cached)
+                except Exception:
+                    pass
         if cached is None:
             base = 30.0 + i / n * 40.0
             span = 40.0 / n
@@ -592,6 +612,29 @@ async def delete_track(track_id: str) -> dict:
     await asyncio.to_thread(path.unlink)
     _TRACK_PATH_CACHE.pop(track_id, None)
     return {"deleted": path.name}
+
+
+@app.patch("/api/tracks/{track_id}")
+async def rename_track(track_id: str, req: schemas.RenameTrackRequest) -> dict:
+    """Set a custom display title for a library track."""
+    path = _resolve_track_path(track_id)
+    title = req.title.strip()
+    if not title:
+        raise HTTPException(status_code=400, detail="title must not be empty")
+
+    def _run() -> dict:
+        fh = analysis_mod.file_hash(path)
+        meta = db.get_track_meta(fh) or {}
+        db.put_track_meta(
+            fh,
+            title=title,
+            artist=meta.get("artist", ""),
+            source_url=meta.get("source_url", ""),
+            video_id=meta.get("video_id", ""),
+        )
+        return {"id": track_id, "title": title}
+
+    return await asyncio.to_thread(_run)
 
 
 @app.post("/api/tracks/refresh-titles")

@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import type { MediaPlayerInstance } from "@vidstack/react"
 import { toast } from "sonner"
 import {
   Disc3,
@@ -31,6 +32,7 @@ import { SettingsDialog } from "@/components/SettingsDialog"
 import { useRefreshTitles, useTracks } from "@/api/client"
 import type { Drop, Project, RenderConfig, Track } from "@/api/types"
 import { useProgressSocket } from "@/hooks/useProgressSocket"
+import { toggleActivePlayback } from "@/lib/audioFocus"
 import { displayTitle, formatDuration } from "@/lib/format"
 import { setThemePref, useThemePref, type ThemePref } from "@/lib/theme"
 import { cn } from "@/lib/utils"
@@ -173,6 +175,27 @@ export default function App() {
   const [tracksDrawerOpen, setTracksDrawerOpen] = useState(false)
   const drawerTouchRef = useRef<{ x: number; y: number } | null>(null)
 
+  // Spacebar anywhere toggles play/pause on the active player (the one that
+  // last played, or the most recent on screen) — unless the user is typing
+  // in a form control or focused inside a player (Vidstack handles it there).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.code !== "Space" || e.repeat) return
+      const t = e.target as HTMLElement | null
+      if (
+        t &&
+        (t.isContentEditable ||
+          t.closest(
+            "input, textarea, select, button, [contenteditable], [role='slider'], .automix-player",
+          ))
+      )
+        return
+      if (toggleActivePlayback()) e.preventDefault()
+    }
+    window.addEventListener("keydown", onKey)
+    return () => window.removeEventListener("keydown", onKey)
+  }, [])
+
   // The tracks drawer is a mobile-only surface; if the viewport grows past
   // the lg breakpoint while it's open, its overlay would sit on top of the
   // desktop 3-column layout — close it automatically.
@@ -245,6 +268,17 @@ export default function App() {
   )
   const [previewingKey, setPreviewingKey] = useState<string | null>(null)
   const [videoIsPlaying, setVideoIsPlaying] = useState(false)
+  // Held in a ref, NOT state: the vidstack instance has getters that throw
+  // when enumerated, which breaks React dev tooling if it lands in state.
+  const previewPlayerRef = useRef<MediaPlayerInstance | null>(null)
+  const getPreviewPlayer = useCallback(() => previewPlayerRef.current, [])
+
+  const togglePreviewPlayback = () => {
+    const p = previewPlayerRef.current
+    if (!p) return
+    if (p.paused) void p.play()?.catch?.(() => {})
+    else p.pause()
+  }
 
   const trackById = useMemo(
     () => Object.fromEntries((tracks.data ?? []).map((t) => [t.id, t])),
@@ -562,6 +596,9 @@ export default function App() {
                   seekRequest={seekRequest}
                   onTimeUpdate={setCurrentTime}
                   onPlayingChange={setVideoIsPlaying}
+                  onPlayerRef={(p) => {
+                    previewPlayerRef.current = p
+                  }}
                   loop={loopPreviews}
                 />
               ) : (
@@ -580,49 +617,46 @@ export default function App() {
           </Card>
 
           <Card className="border-border/60 bg-card/40 backdrop-blur">
-            <CardHeader className="pb-2">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <CardTitle className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-widest text-primary/80">
-                  <Waves className="h-3.5 w-3.5" /> Timeline
-                </CardTitle>
-                {selectedTrack?.analysis && dropEnd > dropStart && (
-                  <div className="flex items-center gap-2.5">
-                    <span className="font-mono text-[11px] tabular-nums text-muted-foreground">
-                      {formatDuration(dropStart)}–{formatDuration(dropEnd)} ·{" "}
-                      {(dropEnd - dropStart).toFixed(1)}s
-                    </span>
-                    <Button
-                      size="sm"
-                      variant="secondary"
-                      className="h-7 px-2.5 text-xs"
-                      title="Add the trimmed selection (drag the green/red markers to adjust) as a clip"
-                      onClick={() => {
-                        if (!selectedTrack?.analysis) return
-                        const kick = (selectedTrack.analysis.drops ?? []).find(
-                          (d) =>
-                            d.kick_s != null &&
-                            d.kick_s >= dropStart &&
-                            d.kick_s <= dropEnd,
-                        )?.kick_s
-                        handleAdd(selectedTrack, {
-                          start_s: dropStart,
-                          end_s: dropEnd,
-                          kick_s: kick,
-                          score: 0,
-                        })
-                      }}
-                    >
-                      <Plus className="h-3.5 w-3.5" /> Add selection
-                    </Button>
-                  </div>
-                )}
-              </div>
-            </CardHeader>
-            <CardContent>
+            <CardContent className="pt-4">
               {selectedTrack ? (
                 <Timeline
                   key={selectedTrack.id}
                   track={selectedTrack}
+                  actions={
+                    selectedTrack.analysis && dropEnd > dropStart ? (
+                      <div className="flex items-center gap-2">
+                        <span className="font-mono text-[11px] tabular-nums text-muted-foreground">
+                          {formatDuration(dropStart)}–{formatDuration(dropEnd)}{" "}
+                          · {(dropEnd - dropStart).toFixed(1)}s
+                        </span>
+                        <Button
+                          size="sm"
+                          variant="secondary"
+                          className="h-6 px-2 text-xs"
+                          title="Add the trimmed selection (drag the green/red markers to adjust) as a clip"
+                          onClick={() => {
+                            if (!selectedTrack?.analysis) return
+                            const kick = (
+                              selectedTrack.analysis.drops ?? []
+                            ).find(
+                              (d) =>
+                                d.kick_s != null &&
+                                d.kick_s >= dropStart &&
+                                d.kick_s <= dropEnd,
+                            )?.kick_s
+                            handleAdd(selectedTrack, {
+                              start_s: dropStart,
+                              end_s: dropEnd,
+                              kick_s: kick,
+                              score: 0,
+                            })
+                          }}
+                        >
+                          <Plus className="h-3 w-3" /> Add selection
+                        </Button>
+                      </div>
+                    ) : null
+                  }
                   dropStart={dropStart}
                   dropEnd={dropEnd}
                   onChange={({ dropStart: s, dropEnd: e }) => {
@@ -642,6 +676,9 @@ export default function App() {
                     setDropEnd(e)
                   }}
                   externalTime={currentTime}
+                  isPlaying={videoIsPlaying}
+                  onTogglePlay={togglePreviewPlayback}
+                  getMediaPlayer={getPreviewPlayer}
                   onSeek={(t) =>
                     setSeekRequest({ time: t, key: Date.now() })
                   }

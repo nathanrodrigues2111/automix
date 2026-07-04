@@ -1,7 +1,15 @@
-import { useEffect, useRef, useState } from "react"
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react"
 import WaveSurfer from "wavesurfer.js"
 import RegionsPlugin from "wavesurfer.js/dist/plugins/regions.esm.js"
 import TimelinePlugin from "wavesurfer.js/dist/plugins/timeline.esm.js"
+import { Maximize2, Pause, Play, ZoomIn, ZoomOut } from "lucide-react"
+import type { MediaPlayerInstance } from "@vidstack/react"
 import type { Drop, Track } from "@/api/types"
 import { trackVideoUrl } from "@/api/client"
 import { useEffectiveTheme } from "@/lib/theme"
@@ -12,7 +20,11 @@ const MIN_GAP_S = 1
 /** Snap a dragged handle to a downbeat when within this window. */
 const SNAP_WINDOW_S = 0.15
 /** Height of the waveform drawing area (matches WaveSurfer `height`). */
-const WAVE_HEIGHT = 120
+const WAVE_HEIGHT = 72
+/** Hard ceiling for zoom, in pixels per second of audio. */
+const MAX_PX_PER_SEC = 300
+/** Initial zoom relative to fit-to-width. */
+const DEFAULT_ZOOM = 4.8
 
 interface TimelineProps {
   track: Track
@@ -23,7 +35,26 @@ interface TimelineProps {
   onSeek?: (timeSec: number) => void
   /** Time to visually display the playhead at (driven by the master video). */
   externalTime?: number
+  /** Master video playback state — drives the smooth playhead + follow. */
+  isPlaying?: boolean
+  /** Toggle play/pause on the master video. */
+  onTogglePlay?: () => void
+  /** Returns the master video player, for frame-accurate playhead reads.
+   *  A getter (not the instance) so the player object never sits in React
+   *  state/props where dev tooling would enumerate its throwing getters. */
+  getMediaPlayer?: () => MediaPlayerInstance | null
+  /** Extra controls rendered in the toolbar (e.g. "Add selection"). */
+  actions?: ReactNode
   onReady?: (wavesurfer: WaveSurfer) => void
+}
+
+/** Scroll/zoom geometry of the waveform, mirrored into React state so the
+ *  trim overlay (regular DOM — WaveSurfer renders in a shadow root where our
+ *  stylesheet can't reach) can track the zoomed waveform in pixels. */
+interface ViewGeom {
+  scroll: number
+  totalW: number
+  visibleW: number
 }
 
 /** m:ss.cs — precise readout for the drag tooltip. */
@@ -40,15 +71,76 @@ export function Timeline({
   onChange,
   onSeek,
   externalTime,
+  isPlaying = false,
+  onTogglePlay,
+  getMediaPlayer,
+  actions,
   onReady,
 }: TimelineProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const overlayRef = useRef<HTMLDivElement>(null)
   const wsRef = useRef<WaveSurfer | null>(null)
   const [dragging, setDragging] = useState<"start" | "end" | null>(null)
+  const [view, setView] = useState<ViewGeom>({ scroll: 0, totalW: 0, visibleW: 0 })
+  // null = fit the whole track to the container width (no h-scroll).
+  const [pxPerSec, setPxPerSec] = useState<number | null>(null)
+  // True until WaveSurfer has decoded and drawn the waveform.
+  const [loading, setLoading] = useState(true)
 
   const theme = useEffectiveTheme()
   const duration = track.duration_s
+
+  const fitPps = useCallback(() => {
+    const w = containerRef.current?.clientWidth ?? 800
+    return w / Math.max(1, duration)
+  }, [duration])
+
+  const syncView = useCallback(() => {
+    const ws = wsRef.current
+    const cont = containerRef.current
+    if (!ws || !cont) return
+    let totalW = 0
+    try {
+      totalW = ws.getWrapper().clientWidth
+    } catch {
+      return
+    }
+    const scroll = ws.getScroll()
+    const visibleW = cont.clientWidth
+    setView((prev) =>
+      prev.scroll === scroll && prev.totalW === totalW && prev.visibleW === visibleW
+        ? prev
+        : { scroll, totalW, visibleW },
+    )
+  }, [])
+
+  /** Scroll so the playhead stays visible. `lock` keeps it centered (used
+   *  every frame during playback for a butter-smooth DAW-style follow). */
+  const followPlayhead = useCallback(
+    (t: number, lock = false) => {
+      const ws = wsRef.current
+      const cont = containerRef.current
+      if (!ws || !cont) return
+      const dur = ws.getDuration()
+      if (dur <= 0) return
+      const total = ws.getWrapper().clientWidth
+      const visible = cont.clientWidth
+      if (total <= visible + 1) return // fully fits — nothing to follow
+      const px = (t / dur) * total
+      const scroll = ws.getScroll()
+      if (lock) {
+        const target = Math.min(Math.max(0, px - visible / 2), total - visible)
+        if (Math.abs(target - scroll) > 0.5) ws.setScroll(target)
+        return
+      }
+      const margin = visible * 0.1
+      if (px < scroll + margin || px > scroll + visible - margin) {
+        ws.setScroll(Math.max(0, px - visible * 0.3))
+      }
+      syncView()
+    },
+    [syncView],
+  )
 
   useEffect(() => {
     if (!containerRef.current) return
@@ -56,7 +148,7 @@ export function Timeline({
     const isDark = theme === "dark"
     const regions = RegionsPlugin.create()
     const timeline = TimelinePlugin.create({
-      height: 18,
+      height: 16,
       timeInterval: 10,
       primaryLabelInterval: 30,
       style: {
@@ -67,22 +159,26 @@ export function Timeline({
 
     const ws = WaveSurfer.create({
       container: containerRef.current,
-      waveColor: "rgba(168, 85, 247, 0.55)",
-      progressColor: "rgba(168, 85, 247, 0.95)",
-      cursorColor: isDark ? "rgba(255,255,255,0.8)" : "rgba(24,24,34,0.8)",
+      waveColor: ["rgba(168, 85, 247, 0.75)", "rgba(217, 70, 239, 0.35)"],
+      progressColor: ["rgba(192, 132, 252, 1)", "rgba(217, 70, 239, 0.75)"],
+      cursorColor: isDark ? "rgba(255,255,255,0.85)" : "rgba(24,24,34,0.85)",
       cursorWidth: 2,
       height: WAVE_HEIGHT,
       barWidth: 2,
       barGap: 1,
-      barRadius: 1,
+      barRadius: 2,
       normalize: true,
+      autoScroll: true,
       url: trackVideoUrl(track.id),
       plugins: [regions, timeline],
     })
 
     wsRef.current = ws
+    setPxPerSec(null)
+    setLoading(true)
 
     ws.on("ready", () => {
+      setLoading(false)
       // Waveform is visual-only — the master <video> is the audio source.
       ws.setVolume(0)
       const dur = ws.getDuration()
@@ -102,6 +198,10 @@ export function Timeline({
       })
 
       drawBeatGrid(ws, track)
+      syncView()
+
+      // Start zoomed in — the follow-playhead scroll keeps the view useful.
+      setPxPerSec(Math.min(MAX_PX_PER_SEC, DEFAULT_ZOOM * fitPps()))
 
       onReady?.(ws)
     })
@@ -116,6 +216,9 @@ export function Timeline({
         onSeek?.(newTime)
       }),
     )
+    subs.push(ws.on("scroll", syncView))
+    subs.push(ws.on("zoom", syncView))
+    subs.push(ws.on("redrawcomplete", syncView))
 
     return () => {
       subs.forEach((u) => u())
@@ -125,23 +228,104 @@ export function Timeline({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [track.id, theme])
 
+  // Coarse sync while paused (seeks, drop previews). The rAF loop below owns
+  // the playhead while playing.
   useEffect(() => {
     const ws = wsRef.current
-    if (!ws || externalTime === undefined) return
+    if (!ws || externalTime === undefined || isPlaying) return
     const cur = ws.getCurrentTime()
     if (Math.abs(cur - externalTime) > 0.25) {
       const dur = ws.getDuration()
-      if (dur > 0) ws.seekTo(externalTime / dur)
+      if (dur > 0) {
+        ws.seekTo(externalTime / dur)
+        followPlayhead(externalTime)
+      }
     }
-  }, [externalTime])
+  }, [externalTime, isPlaying, followPlayhead])
+
+  // Smooth playhead: while playing, read the actual <video> clock every
+  // animation frame (the React-level time updates are throttled to ~5fps)
+  // and keep the view center-locked on the playhead when zoomed in.
+  useEffect(() => {
+    if (!isPlaying || !getMediaPlayer) return
+    let raf = 0
+    const tick = () => {
+      const player = getMediaPlayer()
+      const ws = wsRef.current
+      if (player && ws && ws.getDuration() > 0) {
+        const videoEl = player.el?.querySelector("video")
+        const t = videoEl ? videoEl.currentTime : player.currentTime
+        ws.setTime(t)
+        followPlayhead(t, true)
+        syncView()
+      }
+      raf = requestAnimationFrame(tick)
+    }
+    raf = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(raf)
+  }, [isPlaying, getMediaPlayer, followPlayhead, syncView])
+
+  // ---- Zoom ----------------------------------------------------------------
+
+  const zoomBy = useCallback(
+    (factor: number) => {
+      setPxPerSec((prev) => {
+        const fit = fitPps()
+        const next = (prev ?? fit) * factor
+        if (next <= fit * 1.01) return null // zoomed out to (or past) fit
+        return Math.min(MAX_PX_PER_SEC, next)
+      })
+    },
+    [fitPps],
+  )
+
+  // Apply zoom level; keep the playhead in view when the scale changes.
+  useEffect(() => {
+    const ws = wsRef.current
+    if (!ws) return
+    try {
+      const dur = ws.getDuration()
+      if (dur <= 0) return
+      ws.zoom(pxPerSec ?? fitPps())
+      followPlayhead(ws.getCurrentTime(), true)
+      syncView()
+    } catch {
+      // audio not decoded yet — the fit zoom is the default anyway
+    }
+  }, [pxPerSec, fitPps, followPlayhead, syncView])
+
+  // Ctrl/Cmd + wheel (and trackpad pinch) zooms.
+  useEffect(() => {
+    const el = containerRef.current
+    if (!el) return
+    const onWheel = (e: WheelEvent) => {
+      if (!e.ctrlKey && !e.metaKey) return
+      e.preventDefault()
+      zoomBy(e.deltaY < 0 ? 1.25 : 0.8)
+    }
+    el.addEventListener("wheel", onWheel, { passive: false })
+    return () => el.removeEventListener("wheel", onWheel)
+  }, [zoomBy])
 
   // ---- Manual trim handles -------------------------------------------------
 
   const timeFromClientX = (clientX: number): number => {
     const el = overlayRef.current
+    const ws = wsRef.current
     if (!el || duration <= 0) return 0
     const rect = el.getBoundingClientRect()
-    const frac = Math.min(1, Math.max(0, (clientX - rect.left) / rect.width))
+    let totalW = rect.width
+    let scroll = 0
+    if (ws) {
+      try {
+        totalW = ws.getWrapper().clientWidth
+        scroll = ws.getScroll()
+      } catch {
+        // not rendered yet
+      }
+    }
+    if (totalW <= 0) return 0
+    const frac = Math.min(1, Math.max(0, (clientX - rect.left + scroll) / totalW))
     return frac * duration
   }
 
@@ -172,95 +356,166 @@ export function Timeline({
     }
   }
 
-  const startPct = duration > 0 ? (dropStart / duration) * 100 : 0
-  const endPct = duration > 0 ? (dropEnd / duration) * 100 : 0
+  // Pixel positions of the selection under the current zoom + scroll.
+  const totalW = view.totalW > 0 ? view.totalW : (containerRef.current?.clientWidth ?? 0)
+  const timeToPx = (t: number) =>
+    duration > 0 && totalW > 0 ? (t / duration) * totalW - view.scroll : 0
+  const startPx = timeToPx(dropStart)
+  const endPx = timeToPx(dropEnd)
+  const zoomLabel = pxPerSec ? `${(pxPerSec / fitPps()).toFixed(1)}×` : "Fit"
 
   return (
-    <div className="relative w-full">
-      <div ref={containerRef} className="w-full rounded-md bg-card p-2" />
-
-      {duration > 0 && (
-        <div
-          ref={overlayRef}
-          className="pointer-events-none absolute left-2 right-2 top-2 z-10"
-          style={{ height: WAVE_HEIGHT }}
+    <div className="w-full space-y-1.5">
+      <div className="flex items-center justify-between gap-2">
+        <button
+          type="button"
+          onClick={onTogglePlay}
+          disabled={!onTogglePlay}
+          aria-label={isPlaying ? "Pause" : "Play"}
+          title={isPlaying ? "Pause (Space)" : "Play (Space)"}
+          className="flex h-7 w-7 items-center justify-center rounded-md bg-primary/12 text-primary ring-1 ring-primary/25 transition-colors hover:bg-primary/20 disabled:opacity-40 focus-visible:outline-2 focus-visible:outline-ring"
         >
-          {/* Shaded selection between the trim handles, DAW-style. */}
-          <div
-            aria-hidden
-            className="absolute inset-y-0 bg-primary/10 ring-1 ring-inset ring-primary/25"
-            style={{
-              left: `${startPct}%`,
-              width: `${Math.max(0, endPct - startPct)}%`,
-            }}
-          />
-
-          {(["start", "end"] as const).map((which) => {
-            const t = which === "start" ? dropStart : dropEnd
-            const pct = duration > 0 ? (t / duration) * 100 : 0
-            const isStart = which === "start"
-            const isDraggingThis = dragging === which
-            return (
-              <div
-                key={which}
-                role="slider"
-                tabIndex={0}
-                aria-label={isStart ? "Trim start" : "Trim end"}
-                aria-valuemin={0}
-                aria-valuemax={Math.round(duration)}
-                aria-valuenow={Math.round(t)}
-                aria-valuetext={fmtHandleTime(t)}
-                title={`${isStart ? "Start" : "End"} · drag to trim (Shift = no snap)`}
-                className="group pointer-events-auto absolute inset-y-0 w-3 -translate-x-1/2 cursor-ew-resize touch-none outline-none"
-                style={{ left: `${pct}%` }}
-                onPointerDown={(e) => {
-                  e.preventDefault()
-                  e.currentTarget.setPointerCapture(e.pointerId)
-                  setDragging(which)
-                }}
-                onPointerMove={(e) => {
-                  if (dragging !== which) return
-                  const raw = timeFromClientX(e.clientX)
-                  applyHandleTime(which, e.shiftKey ? raw : snapToDownbeat(raw))
-                }}
-                onPointerUp={() => setDragging(null)}
-                onPointerCancel={() => setDragging(null)}
-                onKeyDown={(e) => {
-                  if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return
-                  e.preventDefault()
-                  const step = e.shiftKey ? 1 : 0.1
-                  const delta = e.key === "ArrowLeft" ? -step : step
-                  applyHandleTime(which, t + delta)
-                }}
-              >
-                {/* Grab bar */}
-                <div
-                  className={cn(
-                    "absolute inset-y-0 left-1/2 w-0.5 -translate-x-1/2 rounded-full transition-[width,background-color]",
-                    isStart ? "bg-emerald-500/80" : "bg-rose-500/80",
-                    "group-hover:w-1 group-focus-visible:w-1",
-                    isDraggingThis && "w-1",
-                  )}
-                />
-                {/* Grip nub */}
-                <div
-                  className={cn(
-                    "absolute left-1/2 h-3.5 w-2.5 -translate-x-1/2 rounded-sm ring-1 ring-black/20",
-                    isStart ? "top-0 bg-emerald-500" : "bottom-0 bg-rose-500",
-                    "group-focus-visible:ring-2 group-focus-visible:ring-ring",
-                  )}
-                />
-                {/* Time tooltip while dragging */}
-                {isDraggingThis && (
-                  <div className="absolute -top-7 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-md border border-border/60 bg-popover px-1.5 py-0.5 font-mono text-[11px] tabular-nums text-popover-foreground shadow-md">
-                    {fmtHandleTime(t)}
-                  </div>
-                )}
-              </div>
-            )
-          })}
+          {isPlaying ? (
+            <Pause className="h-3.5 w-3.5 fill-current" />
+          ) : (
+            <Play className="h-3.5 w-3.5 fill-current" />
+          )}
+        </button>
+        <div className="flex items-center gap-0.5">
+          {actions && <div className="mr-2 flex items-center">{actions}</div>}
+          <span
+            className="mr-1 font-mono text-[10px] tabular-nums text-muted-foreground/70"
+            title="Zoom level (Ctrl+scroll on the waveform to zoom)"
+          >
+            {zoomLabel}
+          </span>
+          <button
+            type="button"
+            onClick={() => zoomBy(0.8)}
+            disabled={pxPerSec === null}
+            aria-label="Zoom out"
+            title="Zoom out"
+            className="flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground disabled:opacity-40 disabled:hover:bg-transparent focus-visible:outline-2 focus-visible:outline-ring"
+          >
+            <ZoomOut className="h-3.5 w-3.5" />
+          </button>
+          <button
+            type="button"
+            onClick={() => zoomBy(1.25)}
+            aria-label="Zoom in"
+            title="Zoom in"
+            className="flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring"
+          >
+            <ZoomIn className="h-3.5 w-3.5" />
+          </button>
+          <button
+            type="button"
+            onClick={() => setPxPerSec(null)}
+            disabled={pxPerSec === null}
+            aria-label="Fit whole track"
+            title="Fit whole track"
+            className="flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground disabled:opacity-40 disabled:hover:bg-transparent focus-visible:outline-2 focus-visible:outline-ring"
+          >
+            <Maximize2 className="h-3.5 w-3.5" />
+          </button>
         </div>
-      )}
+      </div>
+
+      <div className="relative w-full overflow-hidden rounded-xl border border-border/60 bg-gradient-to-b from-card to-card/60 shadow-[inset_0_1px_0_color-mix(in_oklch,var(--foreground)_6%,transparent)]">
+        <div ref={containerRef} className="w-full px-2 py-2" />
+
+        {loading && (
+          <div className="absolute inset-0 z-20 flex items-center bg-card/90 px-2 py-2">
+            <div
+              className="w-full animate-pulse rounded-lg bg-muted/50"
+              style={{ height: WAVE_HEIGHT }}
+            />
+          </div>
+        )}
+
+        {duration > 0 && totalW > 0 && !loading && (
+          <div
+            ref={overlayRef}
+            className="pointer-events-none absolute left-2 right-2 top-2 z-10 overflow-hidden"
+            style={{ height: WAVE_HEIGHT }}
+          >
+            {/* Shaded selection between the trim handles, DAW-style. */}
+            <div
+              aria-hidden
+              className="absolute inset-y-0 bg-primary/10 ring-1 ring-inset ring-primary/25"
+              style={{
+                left: startPx,
+                width: Math.max(0, endPx - startPx),
+              }}
+            />
+
+            {(["start", "end"] as const).map((which) => {
+              const t = which === "start" ? dropStart : dropEnd
+              const px = timeToPx(t)
+              const isStart = which === "start"
+              const isDraggingThis = dragging === which
+              return (
+                <div
+                  key={which}
+                  role="slider"
+                  tabIndex={0}
+                  aria-label={isStart ? "Trim start" : "Trim end"}
+                  aria-valuemin={0}
+                  aria-valuemax={Math.round(duration)}
+                  aria-valuenow={Math.round(t)}
+                  aria-valuetext={fmtHandleTime(t)}
+                  title={`${isStart ? "Start" : "End"} · drag to trim (Shift = no snap)`}
+                  className="group pointer-events-auto absolute inset-y-0 w-3 -translate-x-1/2 cursor-ew-resize touch-none outline-none"
+                  style={{ left: px }}
+                  onPointerDown={(e) => {
+                    e.preventDefault()
+                    e.currentTarget.setPointerCapture(e.pointerId)
+                    setDragging(which)
+                  }}
+                  onPointerMove={(e) => {
+                    if (dragging !== which) return
+                    const raw = timeFromClientX(e.clientX)
+                    applyHandleTime(which, e.shiftKey ? raw : snapToDownbeat(raw))
+                  }}
+                  onPointerUp={() => setDragging(null)}
+                  onPointerCancel={() => setDragging(null)}
+                  onKeyDown={(e) => {
+                    if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return
+                    e.preventDefault()
+                    const step = e.shiftKey ? 1 : 0.1
+                    const delta = e.key === "ArrowLeft" ? -step : step
+                    applyHandleTime(which, t + delta)
+                  }}
+                >
+                  {/* Grab bar */}
+                  <div
+                    className={cn(
+                      "absolute inset-y-0 left-1/2 w-0.5 -translate-x-1/2 rounded-full transition-[width,background-color]",
+                      isStart ? "bg-emerald-500/80" : "bg-rose-500/80",
+                      "group-hover:w-1 group-focus-visible:w-1",
+                      isDraggingThis && "w-1",
+                    )}
+                  />
+                  {/* Grip nub */}
+                  <div
+                    className={cn(
+                      "absolute left-1/2 h-3.5 w-2.5 -translate-x-1/2 rounded-sm ring-1 ring-black/20",
+                      isStart ? "top-0 bg-emerald-500" : "bottom-0 bg-rose-500",
+                      "group-focus-visible:ring-2 group-focus-visible:ring-ring",
+                    )}
+                  />
+                  {/* Time tooltip while dragging */}
+                  {isDraggingThis && (
+                    <div className="absolute -top-7 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-md border border-border/60 bg-popover px-1.5 py-0.5 font-mono text-[11px] tabular-nums text-popover-foreground shadow-md">
+                      {fmtHandleTime(t)}
+                    </div>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        )}
+      </div>
     </div>
   )
 }

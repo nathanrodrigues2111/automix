@@ -153,6 +153,9 @@ def _snap_to_downbeat(t: float, downbeats: list[float]) -> float:
     return min(downbeats, key=lambda d: abs(d - t))
 
 
+DROPS_VERSION = 2
+
+
 def find_drops(
     wav_path: Path,
     downbeats: list[float],
@@ -163,11 +166,18 @@ def find_drops(
     """Detect EDM drop *moments* — the points where energy jumps from a
     quiet section (buildup/breakdown) into a loud section (the main drop).
 
-    Returns list of {start_s, end_s, score} where start_s = drop_moment − 5s
-    (captures the buildup), all snapped to downbeats.
+    A real drop is where the KICK + SUB-BASS slam in, not merely where the
+    track gets louder: loud vocal choruses and shouted/spoken intros spike
+    full-band RMS but carry almost no sub energy, which is how the old
+    full-band detector kept picking vocal sections. So candidates are scored
+    primarily on the low-band (≤150 Hz) energy jump, then each candidate's
+    drop body is validated for (a) substantial bass share, (b) bass lift over
+    the track's median, and (c) a periodic kick at the track's tempo.
+
+    Returns list of {start_s, end_s, kick_s, score}, snapped to downbeats.
     """
     import librosa
-    from scipy.signal import find_peaks
+    from scipy.signal import butter, find_peaks, sosfiltfilt
 
     y, sr = librosa.load(str(wav_path), sr=22050, mono=True)
     duration = len(y) / sr
@@ -179,29 +189,44 @@ def find_drops(
     if rms.size == 0:
         return []
 
+    # Low band = kick + sub. Zero-phase filtering keeps frames aligned.
+    sos = butter(4, 150.0, btype="lowpass", fs=sr, output="sos")
+    y_low = sosfiltfilt(sos, y).astype(np.float32)
+    rms_low = librosa.feature.rms(y=y_low, hop_length=hop)[0]
+    n = min(len(rms), len(rms_low))
+    rms, rms_low = rms[:n], rms_low[:n]
+
     # Drop score = mean energy in the next 2s minus mean energy in the prior
-    # 4s. A drop is "quiet then suddenly loud," which spikes this delta. This
-    # avoids the previous bug where we found the *middle* of sustained loud
-    # sections instead of where the bass kicks in.
+    # 4s. A drop is "quiet then suddenly loud," which spikes this delta.
     win_after = max(1, int(2.0 * sr / hop))
     win_before = max(1, int(4.0 * sr / hop))
-    score = np.zeros_like(rms)
-    for i in range(win_before, len(rms) - win_after):
-        before = float(np.mean(rms[i - win_before : i]))
-        after = float(np.mean(rms[i : i + win_after]))
-        score[i] = after - before
+
+    def _jump(x: np.ndarray) -> np.ndarray:
+        cs = np.concatenate([[0.0], np.cumsum(x)])
+        s = np.zeros_like(x)
+        i = np.arange(win_before, len(x) - win_after)
+        if i.size:
+            before = (cs[i] - cs[i - win_before]) / win_before
+            after = (cs[i + win_after] - cs[i]) / win_after
+            s[i] = after - before
+        return s
+
+    # Bass jump is the drop signature; the full-band jump only breaks ties.
+    score = _jump(rms_low) + 0.35 * _jump(rms)
 
     if np.max(score) <= 0:
         return []
 
-    height = float(np.max(score) * 0.45)
+    # Take a generous candidate pool at a lower threshold — validation below
+    # prunes the vocal/intro false positives the old detector let through.
+    height = float(np.max(score) * 0.30)
     distance = max(1, int(min_separation_s * sr / hop))
     peaks, props = find_peaks(score, height=height, distance=distance)
     if len(peaks) == 0:
         return []
 
     heights = props["peak_heights"]
-    order = np.argsort(-heights)[:max_drops]
+    order = np.argsort(-heights)[: max_drops * 3]
 
     # Per-drop analysis: scan FORWARD from the peak to find the natural drop
     # end (where energy falls back to baseline), and scan BACKWARD to find the
@@ -242,7 +267,43 @@ def find_drops(
     bar_s = 4.0 * 60.0 / bpm if bpm > 0 else 1.875
     dbs = sorted(float(d) for d in downbeats) if downbeats else []
 
+    # --- Drop-body validation ------------------------------------------------
+    # Measured over the 4 bars after the kick. A vocal chorus or spoken intro
+    # fails these; a four-on-the-floor drop passes easily.
+    beat_frames = (60.0 / bpm) * sr / hop if bpm > 0 else 0.0
+    med_low = float(np.median(rms_low)) + 1e-9
+
+    def _body_metrics(kick_t: float) -> tuple[float, float, float]:
+        """Returns (bass_frac, bass_lift, kick_periodicity) for the drop body."""
+        b0 = max(0, int(kick_t * sr / hop))
+        b1 = min(len(rms_low), b0 + max(1, int(4.0 * bar_s * sr / hop)))
+        seg_low = rms_low[b0:b1]
+        seg_full = rms[b0:b1]
+        if seg_low.size < 8:
+            return 0.0, 0.0, 0.0
+        bass_frac = float(np.mean(seg_low)) / (float(np.mean(seg_full)) + 1e-9)
+        bass_lift = float(np.mean(seg_low)) / med_low
+        # Kick periodicity: the low band's onset envelope autocorrelates at
+        # the beat lag when a steady kick is present. Check half/double lags
+        # too so an octave error in BPM tracking doesn't fail a real drop.
+        periodicity = 0.0
+        s0, s1 = b0 * hop, min(len(y_low), b1 * hop)
+        onset = librosa.onset.onset_strength(y=y_low[s0:s1], sr=sr, hop_length=hop)
+        if beat_frames > 0 and onset.size > 4 * beat_frames:
+            onset = onset - float(np.mean(onset))
+            ac = np.correlate(onset, onset, mode="full")[onset.size - 1 :]
+            if ac[0] > 0:
+                acn = ac / ac[0]
+                for mult in (1.0, 0.5, 2.0):
+                    lag = int(round(beat_frames * mult))
+                    if 2 < lag < acn.size - 2:
+                        periodicity = max(
+                            periodicity, float(np.max(acn[lag - 2 : lag + 3]))
+                        )
+        return bass_frac, bass_lift, periodicity
+
     drops: list[dict[str, Any]] = []
+    rejected: list[dict[str, Any]] = []
     for idx in order:
         peak_idx = int(peaks[idx])
         drop_t = float(librosa.frames_to_time(peak_idx, sr=sr, hop_length=hop))
@@ -291,15 +352,31 @@ def find_drops(
 
         if end <= kick_t or end <= start:
             continue
-        drops.append(
-            {
-                "start_s": float(start),
-                "end_s": float(end),
-                "kick_s": float(kick_t),
-                "score": float(heights[idx]),
-            }
-        )
 
+        bass_frac, bass_lift, periodicity = _body_metrics(kick_t)
+        candidate = {
+            "start_s": float(start),
+            "end_s": float(end),
+            "kick_s": float(kick_t),
+            # Steady-kick bodies outrank equally-loud vocal sections.
+            "score": float(heights[idx]) * (1.0 + 0.5 * periodicity),
+        }
+        # Hard gates: the body must be genuinely bass-driven. bass_frac is the
+        # low band's share of full-band energy (drops sit ~0.3-0.6, vocal
+        # sections ~0.05-0.15); bass_lift requires more bass than the track's
+        # median frame, so quiet talky intros can't sneak through.
+        if bass_frac >= 0.18 and bass_lift >= 1.15:
+            drops.append(candidate)
+        else:
+            rejected.append(candidate)
+
+    # Every candidate failing validation usually means an unusual master
+    # (e.g. heavily filtered) — better to return the best guess than nothing.
+    if not drops and rejected:
+        drops = rejected[:1]
+
+    drops.sort(key=lambda d: -d["score"])
+    drops = drops[:max_drops]
     drops.sort(key=lambda d: d["start_s"])
     return drops
 
@@ -478,4 +555,5 @@ def analyze_track(video_path: Path, progress: ProgressCb = None) -> dict[str, An
         "downbeats": downbeats,
         "segments": segments,
         "drops": drops,
+        "drops_version": DROPS_VERSION,
     }

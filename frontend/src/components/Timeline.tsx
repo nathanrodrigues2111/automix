@@ -87,6 +87,14 @@ export function Timeline({
   const draggingRef = useRef<"start" | "end" | null>(null)
   draggingRef.current = dragging
   const [view, setView] = useState<ViewGeom>({ scroll: 0, totalW: 0, visibleW: 0 })
+  // True while the user is drag-panning the waveform view.
+  const [panning, setPanning] = useState(false)
+  const panningRef = useRef(false)
+  // After a manual pan the view must stay where the user put it — follow
+  // resumes on the next seek or when playback is (re)started.
+  const followSuspendedRef = useRef(false)
+  // Swallow the click WaveSurfer would turn into a seek right after a pan.
+  const suppressClickRef = useRef(false)
   // null = fit the whole track to the container width (no h-scroll).
   const [pxPerSec, setPxPerSec] = useState<number | null>(null)
   // True until WaveSurfer has decoded and drawn the waveform.
@@ -126,6 +134,7 @@ export function Timeline({
       const ws = wsRef.current
       const cont = containerRef.current
       if (!ws || !cont) return
+      if (panningRef.current || followSuspendedRef.current) return
       const dur = ws.getDuration()
       if (dur <= 0) return
       const total = ws.getWrapper().clientWidth
@@ -237,6 +246,7 @@ export function Timeline({
     // programmatic seekTo, which would create a feedback loop with externalTime.
     subs.push(
       ws.on("interaction", (newTime) => {
+        followSuspendedRef.current = false
         onSeek?.(newTime)
       }),
     )
@@ -273,6 +283,7 @@ export function Timeline({
   // and keep the view center-locked on the playhead when zoomed in.
   useEffect(() => {
     if (!isPlaying || !getMediaPlayer) return
+    followSuspendedRef.current = false // (re)starting playback re-engages follow
     let raf = 0
     const tick = () => {
       const player = getMediaPlayer()
@@ -311,8 +322,25 @@ export function Timeline({
     try {
       const dur = ws.getDuration()
       if (dur <= 0) return
+      const cont = containerRef.current
+      // While follow is suspended (user panned away), zoom around the view
+      // center instead of snapping back to the playhead.
+      const keepCenter = followSuspendedRef.current && cont
+      const before = keepCenter
+        ? {
+            total: ws.getWrapper().clientWidth,
+            scroll: ws.getScroll(),
+            visible: cont.clientWidth,
+          }
+        : null
       ws.zoom(pxPerSec ?? fitPps())
-      followPlayhead(ws.getCurrentTime(), true)
+      if (before && before.total > 0) {
+        const centerFrac = (before.scroll + before.visible / 2) / before.total
+        const total = ws.getWrapper().clientWidth
+        ws.setScroll(Math.max(0, centerFrac * total - before.visible / 2))
+      } else {
+        followPlayhead(ws.getCurrentTime(), true)
+      }
       syncView()
     } catch {
       // audio not decoded yet — the fit zoom is the default anyway
@@ -331,6 +359,98 @@ export function Timeline({
     el.addEventListener("wheel", onWheel, { passive: false })
     return () => el.removeEventListener("wheel", onWheel)
   }, [zoomBy])
+
+  // ---- Drag to pan -----------------------------------------------------------
+
+  // Drag the waveform horizontally to pan the view when zoomed in. A plain
+  // click (below the movement threshold) still falls through as a seek.
+  useEffect(() => {
+    const el = containerRef.current
+    if (!el) return
+    const THRESHOLD_PX = 5
+    let pan: {
+      pointerId: number
+      startX: number
+      startScroll: number
+      moved: boolean
+    } | null = null
+
+    const scrollable = () => {
+      const ws = wsRef.current
+      const cont = containerRef.current
+      if (!ws || !cont) return null
+      let total = 0
+      try {
+        total = ws.getWrapper().clientWidth
+      } catch {
+        return null
+      }
+      const visible = cont.clientWidth
+      return total > visible + 1 ? { ws, max: total - visible } : null
+    }
+
+    const onPointerDown = (e: PointerEvent) => {
+      if (e.button !== 0) return
+      const s = scrollable()
+      if (!s) return
+      pan = {
+        pointerId: e.pointerId,
+        startX: e.clientX,
+        startScroll: s.ws.getScroll(),
+        moved: false,
+      }
+    }
+    const onPointerMove = (e: PointerEvent) => {
+      if (!pan || e.pointerId !== pan.pointerId) return
+      const dx = e.clientX - pan.startX
+      if (!pan.moved && Math.abs(dx) < THRESHOLD_PX) return
+      const s = scrollable()
+      if (!s) return
+      if (!pan.moved) {
+        pan.moved = true
+        panningRef.current = true
+        setPanning(true)
+        try {
+          el.setPointerCapture(e.pointerId)
+        } catch {
+          // capture can fail if the pointer is already gone — pan still works
+        }
+      }
+      s.ws.setScroll(Math.min(s.max, Math.max(0, pan.startScroll - dx)))
+      syncView()
+    }
+    const endPan = (e: PointerEvent) => {
+      if (!pan || e.pointerId !== pan.pointerId) return
+      if (pan.moved) {
+        followSuspendedRef.current = true
+        suppressClickRef.current = true
+        panningRef.current = false
+        setPanning(false)
+      }
+      pan = null
+    }
+    // Capture-phase: after a pan, swallow the click before WaveSurfer's own
+    // listener (inside its shadow root) turns it into a seek.
+    const onClickCapture = (e: MouseEvent) => {
+      if (!suppressClickRef.current) return
+      suppressClickRef.current = false
+      e.preventDefault()
+      e.stopPropagation()
+    }
+
+    el.addEventListener("pointerdown", onPointerDown)
+    el.addEventListener("pointermove", onPointerMove)
+    el.addEventListener("pointerup", endPan)
+    el.addEventListener("pointercancel", endPan)
+    el.addEventListener("click", onClickCapture, true)
+    return () => {
+      el.removeEventListener("pointerdown", onPointerDown)
+      el.removeEventListener("pointermove", onPointerMove)
+      el.removeEventListener("pointerup", endPan)
+      el.removeEventListener("pointercancel", endPan)
+      el.removeEventListener("click", onClickCapture, true)
+    }
+  }, [syncView])
 
   // ---- Manual trim handles -------------------------------------------------
 
@@ -447,7 +567,19 @@ export function Timeline({
       </div>
 
       <div className="relative w-full overflow-hidden rounded-xl border border-border/60 bg-gradient-to-b from-card to-card/60 shadow-[inset_0_1px_0_color-mix(in_oklch,var(--foreground)_6%,transparent)]">
-        <div ref={containerRef} className="w-full px-2 py-2" />
+        <div
+          ref={containerRef}
+          className="w-full px-2 py-2"
+          // cursor is an inherited property, so it reaches into WaveSurfer's
+          // shadow DOM where our classes can't. Grab = pannable, grabbing = panning.
+          style={{
+            cursor: panning
+              ? "grabbing"
+              : view.totalW > view.visibleW + 1
+                ? "grab"
+                : undefined,
+          }}
+        />
 
         {loading && (
           <div className="absolute inset-0 z-20 flex items-center bg-card/90 px-2 py-2">

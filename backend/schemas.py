@@ -79,7 +79,7 @@ class RenderRequest(BaseModel):
     no_time_stretch: bool = False  # drops-only fast path: trim+concat each source, no BPM matching
     brand_overlay: bool = True  # EDMPAPA letterbox bars + logo pass
     show_titles: bool = True  # per-clip track title in the bottom bar
-    outro_s: float = 20.0  # black+silent tail for YouTube end screens (0 = off)
+    outro_s: float = 10.0  # black+silent tail for YouTube end screens (0 = off)
 
 
 class YouTubeImportRequest(BaseModel):

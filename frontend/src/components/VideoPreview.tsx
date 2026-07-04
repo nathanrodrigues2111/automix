@@ -160,7 +160,13 @@ export function VideoPreview({
             top/bottom, wordmark baked in, transparent middle) — the render
             composites it 1:1, so the preview just stretches it over the
             player for pixel-true branding. */}
-        {!brandOverlay.intro && (
+        {brandOverlay.intro ? (
+          <img
+            src={`${import.meta.env.BASE_URL}black-bars.png`}
+            alt=""
+            className="absolute inset-0 h-full w-full"
+          />
+        ) : (
           <img
             src={`${import.meta.env.BASE_URL}edmpapa.png`}
             alt="EDMPAPA"

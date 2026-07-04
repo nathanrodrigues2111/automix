@@ -583,9 +583,9 @@ AUTOMIX_DEFAULT_CONFIG: dict[str, Any] = {
     "harmonic_pitch_shift_max_semitones": 0,
     "brand_overlay": True,
     "show_titles": True,
-    # YouTube end screens occupy the last 5-20s of a video — reserve 20s of
-    # black + silence after the mix ends.
-    "outro_s": 20.0,
+    # Black + silence after the mix ends, for YouTube end screens (which
+    # occupy the last 5-20s of a video).
+    "outro_s": 10.0,
 }
 
 

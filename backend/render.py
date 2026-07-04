@@ -27,6 +27,7 @@ EXPORTS_DIR = VIDEOS_DIR / "exports"
 RENDER_TMP_DIR = BACKEND_DIR / ".cache" / "renders"
 ASSETS_DIR = PROJECT_ROOT / "assets"
 LOGO_PATH = ASSETS_DIR / "edmpapa11.png"
+BARS_PATH = ASSETS_DIR / "black-bars.png"
 FONT_PATH = ASSETS_DIR / "Bebas-Regular.ttf"
 
 # EDMPAPA branding geometry (1920x1080 canvas).
@@ -549,15 +550,24 @@ def _apply_branding(
 
     filters: list[str] = []
     label = "base"
-    # brand_start > 0: the bars/logo stay hidden under the intro animation
-    # and pop in exactly when it ends (on the first drop's kick).
+    # brand_start > 0: during the intro animation the full branding (with
+    # the wordmark) is replaced by plain letterbox bars (black-bars.png);
+    # the wordmark pops in exactly when the intro ends (first drop's kick).
     en = f":enable='gte(t,{brand_start:.3f})'" if brand_start > 0 else ""
+    have_bars = brand_start > 0 and BARS_PATH.exists()
     filters.append(
         f"[0:v]scale={_BRAND_W}:{_BRAND_H}:force_original_aspect_ratio=increase,"
         f"crop={_BRAND_W}:{_BRAND_H},setsar=1,"
-        f"drawbox=x=0:y=0:w=iw:h={_BAR_H}:color=black:t=fill{en},"
-        f"drawbox=x=0:y=ih-{_BAR_H}:w=iw:h={_BAR_H}:color=black:t=fill{en}[{label}]"
+        f"drawbox=x=0:y=0:w=iw:h={_BAR_H}:color=black:t=fill,"
+        f"drawbox=x=0:y=ih-{_BAR_H}:w=iw:h={_BAR_H}:color=black:t=fill[{label}]"
     )
+    if have_bars:
+        bars_idx = 2 if have_logo else 1
+        filters.append(
+            f"[{label}][{bars_idx}:v]overlay=x=0:y=0:"
+            f"enable='lt(t,{brand_start:.3f})'[barsed]"
+        )
+        label = "barsed"
     if have_logo:
         try:
             lw, lh = _probe_dims(LOGO_PATH)
@@ -594,6 +604,8 @@ def _apply_branding(
         cmd = ["ffmpeg", "-y", "-i", str(video_in)]
         if have_logo:
             cmd += ["-i", str(LOGO_PATH)]
+        if have_bars:
+            cmd += ["-i", str(BARS_PATH)]
         cmd += [
             "-filter_complex", ";".join(filters),
             "-map", f"[{label}]", "-map", "0:a?",

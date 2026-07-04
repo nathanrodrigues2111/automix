@@ -99,7 +99,7 @@ const DEFAULT_CONFIG: Omit<RenderConfig, "clips"> = {
   no_time_stretch: false,
   brand_overlay: true, // EDMPAPA black bars + logo
   show_titles: true, // per-track title overlay
-  outro_s: 20, // black outro reserved for YouTube end screens
+  outro_s: 10, // black outro reserved for YouTube end screens
   harmonic_pitch_shift_max_semitones: 0, // don't pitch-shift either
 }
 
@@ -160,9 +160,9 @@ function RefreshTitlesButton() {
   )
 }
 
-// v2: beat-matched renders became the default (no_time_stretch: false) —
-// bumping the key drops stale persisted configs that would pin the old mode.
-const SETTINGS_KEY = "automix.settings.v2"
+// v3: outro default changed to 10s. Bumping the key drops stale persisted
+// configs that would pin old defaults.
+const SETTINGS_KEY = "automix.settings.v3"
 
 interface StoredSettings {
   config?: Partial<Omit<RenderConfig, "clips">>
@@ -301,6 +301,15 @@ export default function App() {
     }
 
   const [renderMode, setRenderMode] = useState<"preview" | "full" | null>(null)
+
+  // Opening the render dialog silences the app: the live mix preview stops
+  // and any playing video pauses, so nothing talks over the render.
+  useEffect(() => {
+    if (renderMode == null) return
+    livePreview.stop()
+    previewPlayerRef.current?.pause()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [renderMode])
   const [activeTab, setActiveTab] = useState<ActiveTab>("preview")
   const [playRequest, setPlayRequest] = useState<PlayRequest | null>(null)
   const [seekRequest, setSeekRequest] = useState<SeekRequest | null>(null)

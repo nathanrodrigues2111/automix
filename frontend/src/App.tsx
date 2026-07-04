@@ -103,7 +103,7 @@ const DEFAULT_CONFIG: Omit<RenderConfig, "clips"> = {
   harmonic_pitch_shift_max_semitones: 0, // don't pitch-shift either
 }
 
-/** Material play_circle_filled — the app logo mark. */
+/** Material play_arrow (outlined) — the app logo mark. */
 function PlayCircleIcon({ className }: { className?: string }) {
   return (
     <svg
@@ -113,7 +113,7 @@ function PlayCircleIcon({ className }: { className?: string }) {
       className={className}
       aria-hidden="true"
     >
-      <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 14.5v-9l6 4.5-6 4.5z" />
+      <path d="M10 8.64L15.27 12 10 15.36V8.64M8 5v14l11-7L8 5z" />
     </svg>
   )
 }

@@ -230,7 +230,10 @@ def _scan_tracks() -> list[dict]:
                     cached["drops"] = drops
                     cached["drops_version"] = analysis_mod.DROPS_VERSION
                     if cached.get("cues"):
-                        drops = analysis_mod.apply_cues(drops, cached["cues"])
+                        drops = analysis_mod.apply_cues(
+                            drops, cached["cues"], wav_path=wav,
+                            bpm=float(cached.get("bpm", 0.0)),
+                        )
                         cached["drops"] = drops
                     db.put_analysis(fh, cached)
                 except Exception:
@@ -286,8 +289,11 @@ async def post_analyze(req: schemas.AnalyzeRequest) -> dict:
             prior = db.get_analysis(fh)
             if prior and prior.get("cues"):
                 result["cues"] = prior["cues"]
+                wav2 = analysis_mod.WAV_CACHE_DIR / f"{fh}.wav"
                 result["drops"] = analysis_mod.apply_cues(
-                    result.get("drops") or [], prior["cues"]
+                    result.get("drops") or [], prior["cues"],
+                    wav_path=wav2 if wav2.exists() else None,
+                    bpm=float(result.get("bpm", 0.0)),
                 )
             db.put_analysis(fh, result)
             progress("analysis", 100.0, "Analysis complete")
@@ -903,7 +909,12 @@ async def post_track_cues(track_id: str, req: TracklistRequest) -> dict:
         cached = db.get_analysis(fh)
         if cached is None:
             raise ValueError("analyze the track first")
-        drops = analysis_mod.apply_cues(cached.get("drops") or [], cues)
+        wav = analysis_mod.WAV_CACHE_DIR / f"{fh}.wav"
+        drops = analysis_mod.apply_cues(
+            cached.get("drops") or [], cues,
+            wav_path=wav if wav.exists() else None,
+            bpm=float(cached.get("bpm", 0.0)),
+        )
         cached["drops"] = drops
         cached["cues"] = cues
         db.put_analysis(fh, cached)

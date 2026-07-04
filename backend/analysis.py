@@ -594,13 +594,89 @@ def label_drops_with_cues(
     return labeled
 
 
+def find_drop_in_window(
+    wav_path: Path, t0: float, t1: float, bpm: float
+) -> dict[str, Any] | None:
+    """Targeted drop detection inside one tracklist segment. Lighter gates
+    than the global detector — when the user says a song is there, the best
+    bass slam in its window is the drop, even if it's a soft one."""
+    import librosa
+    from scipy.signal import butter, find_peaks, sosfiltfilt
+
+    pad = 6.0
+    off = max(0.0, t0 - pad)
+    dur = max(8.0, (t1 - off) + 4.0)
+    y, sr = librosa.load(str(wav_path), sr=22050, mono=True, offset=off, duration=dur)
+    if y.size < sr * 4:
+        return None
+    hop = 512
+    sos = butter(4, 150.0, btype="lowpass", fs=sr, output="sos")
+    yl = sosfiltfilt(sos, y).astype(np.float32)
+    rl = librosa.feature.rms(y=yl, hop_length=hop)[0]
+    wa = max(1, int(2.0 * sr / hop))
+    wb = max(1, int(4.0 * sr / hop))
+    cs = np.concatenate([[0.0], np.cumsum(rl)])
+    idx = np.arange(wb, len(rl) - wa)
+    if idx.size == 0:
+        return None
+    score = np.zeros_like(rl)
+    score[idx] = (cs[idx + wa] - cs[idx]) / wa - (cs[idx] - cs[idx - wb]) / wb
+    # restrict to [t0, t1)
+    lo = int((t0 - off) * sr / hop)
+    hi = min(len(score), int((t1 - off) * sr / hop))
+    if hi - lo < 8:
+        return None
+    win = score[lo:hi]
+    if float(np.max(win)) <= 0:
+        return None
+    pk = lo + int(np.argmax(win))
+    # kick = steepest bass rise near the score peak
+    a0 = max(0, pk - int(1.0 * sr / hop))
+    a1 = min(len(rl) - 1, pk + int(1.0 * sr / hop))
+    dseg = np.diff(rl[a0:a1])
+    kick_i = a0 + (int(np.argmax(dseg)) + 1 if dseg.size else 0)
+    kick_t = off + kick_i * hop / sr
+    beat = 60.0 / bpm if bpm > 0 else 0.46
+    bar = 4.0 * beat
+    # measured local period from body peaks
+    b1 = min(len(rl), kick_i + int(4 * bar * sr / hop))
+    body = rl[kick_i:b1]
+    period = None
+    if body.size > 8:
+        bp, _ = find_peaks(body, distance=max(1, int(0.25 * sr / hop)),
+                           prominence=float(np.max(body)) * 0.15)
+        if len(bp) >= 5:
+            ts = (kick_i + bp) * hop / sr
+            med = float(np.median(np.diff(ts)))
+            if 0.25 <= med <= 1.0:
+                period = med
+    end_t = min(t1, kick_t + 4 * bar)
+    start_t = max(t0 - 2.0, kick_t - 2 * beat)
+    if end_t - kick_t < 2 * beat:
+        return None
+    return {
+        "start_s": float(start_t),
+        "end_s": float(end_t),
+        "kick_s": float(kick_t),
+        "kick_period_s": period,
+        "score": float(np.max(win)),
+        "title": None,
+    }
+
+
 def apply_cues(
-    drops: list[dict[str, Any]], cues: list[dict[str, Any]]
+    drops: list[dict[str, Any]],
+    cues: list[dict[str, Any]],
+    wav_path: Path | None = None,
+    bpm: float = 0.0,
 ) -> list[dict[str, Any]]:
-    """Label drops with cues, then keep only the BEST-scoring drop per cue
-    segment: several detections inside one song read as duplicates in the
-    UI. Unlabeled drops are kept as-is."""
+    """Label drops with cues, keep the BEST drop per cue segment, and (when
+    the wav is available) synthesize a drop for any timed segment the global
+    detector missed — the tracklist says a song is there, so it gets one."""
+    for d in drops:
+        d.pop("title", None)  # never keep labels from an older tracklist
     label_drops_with_cues(drops, cues)
+    timed = [c for c in cues if c.get("t_s") is not None]
     best: dict[int, dict[str, Any]] = {}
     out: list[dict[str, Any]] = []
     for d in drops:
@@ -611,6 +687,19 @@ def apply_cues(
         cur = best.get(ci)
         if cur is None or float(d.get("score", 0)) > float(cur.get("score", 0)):
             best[ci] = d
+    if wav_path is not None and timed:
+        for ci, c in enumerate(timed):
+            if ci in best:
+                continue
+            t0 = float(c["t_s"])
+            t1 = float(timed[ci + 1]["t_s"]) if ci + 1 < len(timed) else t0 + 150.0
+            try:
+                d = find_drop_in_window(wav_path, t0, t1, bpm)
+            except Exception:
+                d = None
+            if d:
+                d["title"] = c["title"]
+                best[ci] = d
     out.extend(best.values())
     out.sort(key=lambda d: float(d.get("start_s", 0.0)))
     return out

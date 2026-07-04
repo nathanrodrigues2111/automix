@@ -148,6 +148,32 @@ def make_progress(job_id: str):
     return cb
 
 
+# ---------- Job cancellation ----------
+
+import threading
+
+_JOB_CANCEL: dict[str, threading.Event] = {}
+
+
+def _register_cancel(job_id: str):
+    ev = threading.Event()
+    _JOB_CANCEL[job_id] = ev
+    return ev
+
+
+def _is_cancelled_error(e: Exception) -> bool:
+    return "cancelled" in str(e).lower()
+
+
+@app.post("/api/jobs/{job_id}/cancel")
+async def cancel_job(job_id: str) -> dict:
+    ev = _JOB_CANCEL.get(job_id)
+    if ev is None:
+        raise HTTPException(status_code=404, detail="job not found or already finished")
+    ev.set()
+    return {"cancelled": job_id}
+
+
 @app.on_event("startup")
 async def on_startup() -> None:
     db.init_db()
@@ -346,6 +372,69 @@ async def get_video(track_id: str, request: Request):
     )
 
 
+@app.post("/api/analyze-all")
+async def post_analyze_all() -> dict:
+    """Analyze every track that has no cached analysis, sequentially in one
+    job (parallel analyses would fight over CPU)."""
+    job_id = uuid.uuid4().hex
+    progress = make_progress(job_id)
+    cancel_ev = _register_cancel(job_id)
+
+    def _run_all() -> int:
+        paths = [
+            p for p in sorted(IMPORTS_DIR.rglob("*.mp4"))
+            if not p.name.startswith("automix_")
+            and db.get_analysis(analysis_mod.file_hash(p)) is None
+        ]
+        n = len(paths)
+        if n == 0:
+            return 0
+        for i, path in enumerate(paths):
+            if cancel_ev.is_set():
+                raise RuntimeError("cancelled")
+            title = _track_title(path)
+            base = i / n * 100.0
+            span = 100.0 / n
+            progress("analysis", min(99.0, base), f"Analyzing {i + 1}/{n}: {title}")
+
+            def sub(stage: str, pct: float, m: str = "", _b=base, _s=span, _t=title, _i=i) -> None:
+                progress(
+                    "analysis",
+                    min(99.0, _b + pct / 100.0 * _s),
+                    f"Analyzing {_i + 1}/{n}: {_t} — {m}" if m else f"Analyzing {_i + 1}/{n}: {_t}",
+                )
+
+            result = analysis_mod.analyze_track(path, sub)
+            db.put_analysis(analysis_mod.file_hash(path), result)
+        return n
+
+    async def _run():
+        try:
+            count = await asyncio.to_thread(_run_all)
+            progress(
+                "analysis",
+                100.0,
+                f"Analyzed {count} track{'s' if count != 1 else ''}"
+                if count
+                else "All tracks already analyzed",
+            )
+        except Exception as e:
+            hub.publish_sync(
+                {
+                    "job_id": job_id,
+                    "stage": "analysis",
+                    "percent": 100.0,
+                    "message": "Cancelled" if _is_cancelled_error(e) else f"error: {e}",
+                    "done": True,
+                }
+            )
+        finally:
+            _JOB_CANCEL.pop(job_id, None)
+
+    asyncio.create_task(_run())
+    return {"job_id": job_id}
+
+
 @app.post("/api/youtube/entries")
 async def post_youtube_entries(req: schemas.YouTubeEntriesRequest) -> list[dict]:
     """Flat playlist listing so the user can pick which tracks to import."""
@@ -374,13 +463,18 @@ async def post_youtube_entries(req: schemas.YouTubeEntriesRequest) -> list[dict]
 async def post_render(req: schemas.RenderRequest) -> dict:
     job_id = uuid.uuid4().hex
     progress = make_progress(job_id)
+    cancel_ev = _register_cancel(job_id)
     config = req.model_dump()
 
     async def _run():
         try:
             progress("render", 1.0, "Starting render")
             record = await asyncio.to_thread(
-                render_mod.render_mix, config, _resolve_track_path, progress
+                render_mod.render_mix,
+                config,
+                _resolve_track_path,
+                progress,
+                cancel_ev.is_set,
             )
             # Final message with the real output path so the UI can play/download it.
             hub.publish_sync(
@@ -400,10 +494,12 @@ async def post_render(req: schemas.RenderRequest) -> dict:
                     "job_id": job_id,
                     "stage": "render",
                     "percent": 100.0,
-                    "message": f"error: {e}",
+                    "message": "Cancelled" if _is_cancelled_error(e) else f"error: {e}",
                     "done": True,
                 }
             )
+        finally:
+            _JOB_CANCEL.pop(job_id, None)
 
     asyncio.create_task(_run())
     # output_path is unknown until render finishes; UI must read it from the
@@ -415,6 +511,7 @@ async def post_render(req: schemas.RenderRequest) -> dict:
 async def post_youtube_import(req: schemas.YouTubeImportRequest) -> dict:
     job_id = uuid.uuid4().hex
     progress = make_progress(job_id)
+    cancel_ev = _register_cancel(job_id)
 
     async def _run():
         try:
@@ -424,7 +521,8 @@ async def post_youtube_import(req: schemas.YouTubeImportRequest) -> dict:
                 IMPORTS_DIR,
                 progress,
                 req.max_tracks,
-                req.video_ids
+                req.video_ids,
+                cancel_ev.is_set,
             )
             hub.publish_sync(
                 {
@@ -436,6 +534,17 @@ async def post_youtube_import(req: schemas.YouTubeImportRequest) -> dict:
                 }
             )
         except Exception as e:
+            if _is_cancelled_error(e):
+                hub.publish_sync(
+                    {
+                        "job_id": job_id,
+                        "stage": "download",
+                        "percent": 100.0,
+                        "message": "Cancelled",
+                        "done": True,
+                    }
+                )
+                return
             hub.publish_sync(
                 {
                     "job_id": job_id,
@@ -445,6 +554,8 @@ async def post_youtube_import(req: schemas.YouTubeImportRequest) -> dict:
                     "done": True,
                 }
             )
+        finally:
+            _JOB_CANCEL.pop(job_id, None)
 
     asyncio.create_task(_run())
     return {"job_id": job_id}
@@ -468,6 +579,9 @@ AUTOMIX_DEFAULT_CONFIG: dict[str, Any] = {
     "harmonic_pitch_shift_max_semitones": 0,
     "brand_overlay": True,
     "show_titles": True,
+    # YouTube end screens occupy the last 5-20s of a video — reserve 20s of
+    # black + silence after the mix ends.
+    "outro_s": 20.0,
 }
 
 
@@ -478,7 +592,11 @@ def _track_title(path: Path) -> str:
     return youtube_mod.clean_title(path.stem)
 
 
-def _automix_pipeline(req: schemas.AutomixRequest, progress) -> dict:
+def _automix_pipeline(req: schemas.AutomixRequest, progress, cancel=None) -> dict:
+    def _check_cancel() -> None:
+        if cancel and cancel():
+            raise RuntimeError("cancelled")
+
     """Sync pipeline run in a worker thread. Returns the render record."""
     # 1. Optional playlist import, mapped to 0-30%.
     if req.url:
@@ -486,7 +604,7 @@ def _automix_pipeline(req: schemas.AutomixRequest, progress) -> dict:
             progress("download", min(30.0, pct * 0.30), msg)
 
         youtube_mod.import_playlist(
-            req.url, IMPORTS_DIR, dl_progress, req.max_tracks, req.video_ids
+            req.url, IMPORTS_DIR, dl_progress, req.max_tracks, req.video_ids, cancel
         )
 
     # 2. Determine source tracks.
@@ -504,6 +622,7 @@ def _automix_pipeline(req: schemas.AutomixRequest, progress) -> dict:
     n = len(paths)
     entries: list[tuple[str, dict]] = []
     for i, path in enumerate(paths):
+        _check_cancel()
         fh = analysis_mod.file_hash(path)
         title = _track_title(path)
         cached = db.get_analysis(fh)
@@ -584,17 +703,21 @@ def _automix_pipeline(req: schemas.AutomixRequest, progress) -> dict:
     def render_progress(stage: str, pct: float, msg: str = "") -> None:
         progress("render", min(99.5, 70.0 + pct * 0.30), msg)
 
-    return render_mod.render_mix(config, _resolve_track_path, render_progress)
+    _check_cancel()
+    return render_mod.render_mix(config, _resolve_track_path, render_progress, cancel)
 
 
 @app.post("/api/automix")
 async def post_automix(req: schemas.AutomixRequest) -> dict:
     job_id = uuid.uuid4().hex
     progress = make_progress(job_id)
+    cancel_ev = _register_cancel(job_id)
 
     async def _run():
         try:
-            record = await asyncio.to_thread(_automix_pipeline, req, progress)
+            record = await asyncio.to_thread(
+                _automix_pipeline, req, progress, cancel_ev.is_set
+            )
             hub.publish_sync(
                 {
                     "job_id": job_id,
@@ -612,10 +735,12 @@ async def post_automix(req: schemas.AutomixRequest) -> dict:
                     "job_id": job_id,
                     "stage": "render",
                     "percent": 100.0,
-                    "message": f"error: {e}",
+                    "message": "Cancelled" if _is_cancelled_error(e) else f"error: {e}",
                     "done": True,
                 }
             )
+        finally:
+            _JOB_CANCEL.pop(job_id, None)
 
     asyncio.create_task(_run())
     return {"job_id": job_id}
@@ -710,7 +835,9 @@ async def get_track_clip(track_id: str, start: float, end: float):
         raise HTTPException(status_code=400, detail="end must be after start")
 
     fh = analysis_mod.file_hash(path)
-    out = PREVIEW_CACHE_DIR / f"{fh}_{start:.2f}_{dur:.2f}.wav"
+    # "n14" = loudness-normalized to -14 LUFS, matching the renderer — so a
+    # quiet master previews at the same level it will have in the export.
+    out = PREVIEW_CACHE_DIR / f"{fh}_{start:.2f}_{dur:.2f}_n14.wav"
 
     def _run() -> Path:
         if out.exists():
@@ -725,7 +852,10 @@ async def get_track_clip(track_id: str, start: float, end: float):
             "-acodec", "pcm_s16le", str(tmp),
         ]
         subprocess.run(cmd, check=True, capture_output=True)
-        tmp.rename(out)
+        normed = out.with_suffix(".norm.wav")
+        render_mod._loudnorm_two_pass(tmp, normed, -14.0)
+        tmp.unlink(missing_ok=True)
+        normed.rename(out)
         return out
 
     p = await asyncio.to_thread(_run)

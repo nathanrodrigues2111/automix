@@ -471,7 +471,7 @@ export function Timeline({
                   aria-valuemax={Math.round(duration)}
                   aria-valuenow={Math.round(t)}
                   aria-valuetext={fmtHandleTime(t)}
-                  title={`${isStart ? "Start" : "End"} · drag to trim (Shift = no snap)`}
+                  title={`${isStart ? "Start" : "End"} handle. Drag to trim, hold Shift to skip snapping`}
                   className="group pointer-events-auto absolute inset-y-0 w-3 -translate-x-1/2 cursor-ew-resize touch-none outline-none"
                   style={{ left: px }}
                   onPointerDown={(e) => {

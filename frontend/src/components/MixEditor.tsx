@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import {
   DndContext,
   KeyboardSensor,
@@ -20,6 +20,7 @@ import {
   ChevronDown,
   ChevronUp,
   GripVertical,
+  Search,
   Layers,
   Loader2,
   Pause,
@@ -65,6 +66,7 @@ export function MixEditor({
   onSaveProject,
   onLoadProject,
 }: MixEditorProps) {
+  const [query, setQuery] = useState("")
   const trackById = useMemo(
     () => Object.fromEntries(tracks.map((t) => [t.id, t])),
     [tracks],
@@ -149,7 +151,7 @@ export function MixEditor({
             size="sm"
             onClick={preview.toggle}
             disabled={clips.length === 0 || preview.state.status === "loading"}
-            title="Instant in-browser audio preview — clips at native BPM with the real transition timing"
+            title="Instant in-browser preview with the real transition timing (clips play at native BPM)"
           >
             {preview.state.status === "loading" ? (
               <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -164,7 +166,7 @@ export function MixEditor({
             size="sm"
             onClick={onRender}
             disabled={clips.length === 0}
-            className="bg-gradient-to-r from-primary to-fuchsia-500 text-primary-foreground shadow-[0_0_18px_-4px_color-mix(in_oklch,var(--primary)_60%,transparent)] hover:from-primary hover:to-fuchsia-400 hover:shadow-[0_0_22px_-2px_color-mix(in_oklch,var(--primary)_70%,transparent)]"
+            className="bg-primary text-primary-foreground shadow-[0_0_18px_-4px_color-mix(in_oklch,var(--primary)_60%,transparent)] hover:bg-primary/90 hover:shadow-[0_0_22px_-2px_color-mix(in_oklch,var(--primary)_70%,transparent)]"
           >
             Render
           </Button>
@@ -213,6 +215,19 @@ export function MixEditor({
           </Button>
         </div>
 
+        {clips.length > 3 && (
+          <div className="relative">
+            <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground/60" />
+            <input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search clips"
+              aria-label="Search clips"
+              className="h-7 w-full rounded-md border border-border/60 bg-background/60 pl-7 pr-2 text-xs focus-visible:outline-2 focus-visible:outline-ring"
+            />
+          </div>
+        )}
+
         {clips.length === 0 ? (
           <div className="flex flex-col items-center gap-2 rounded-lg border border-dashed border-border/60 bg-gradient-to-b from-card/40 to-card/10 p-8 text-center">
             <Layers className="h-6 w-6 text-muted-foreground/50" />
@@ -234,7 +249,18 @@ export function MixEditor({
               strategy={verticalListSortingStrategy}
             >
               <ul className="space-y-2">
-                {clips.map((clip, idx) => {
+                {clips
+                  .map((clip, idx) => ({ clip, idx }))
+                  .filter(({ clip }) => {
+                    const q = query.trim().toLowerCase()
+                    if (!q) return true
+                    const t = trackById[clip.track_id]
+                    return t
+                      ? displayTitle(t).toLowerCase().includes(q) ||
+                          t.filename.toLowerCase().includes(q)
+                      : true
+                  })
+                  .map(({ clip, idx }) => {
                   const track = trackById[clip.track_id]
                   return (
                     <SortableClip

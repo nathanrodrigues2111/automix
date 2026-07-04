@@ -131,6 +131,7 @@ def import_playlist(
     progress: ProgressCb = None,
     max_tracks: int | None = None,
     video_ids: list[str] | None = None,
+    cancel: Callable[[], bool] | None = None,
 ) -> list[dict]:
     """Download every entry of a playlist (or a single video) into dest_dir.
 
@@ -155,6 +156,8 @@ def import_playlist(
     results: list[dict] = []
     failed = 0
     for i, entry in enumerate(entries):
+        if cancel and cancel():
+            raise RuntimeError("cancelled")
         video_id = str(entry["id"])
         raw_title = str(entry.get("title") or video_id)
         display = clean_title(raw_title)
@@ -176,6 +179,8 @@ def import_playlist(
             continue
 
         def _hook(d: dict, _i: int = i, _title: str = display) -> None:
+            if cancel and cancel():
+                raise RuntimeError("cancelled")
             if progress is None or d.get("status") != "downloading":
                 return
             total = d.get("total_bytes") or d.get("total_bytes_estimate") or 0

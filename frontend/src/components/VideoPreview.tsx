@@ -29,7 +29,14 @@ interface VideoPreviewProps {
   /** EDMPAPA brand overlay (live mix preview): bottom logo bar, plus the
    *  track title in Bebas while `showTitle` is true — mirrors the geometry
    *  the renderer burns into the final video. */
-  brandOverlay?: { title: string | null; showTitle: boolean } | null
+  brandOverlay?: {
+    title: string | null
+    showTitle: boolean
+    /** Intro animation window (screen-blended, ends on the first kick). */
+    intro?: boolean
+    /** Black YouTube-end-screen outro tail. */
+    outro?: boolean
+  } | null
   /** When true (default), drop previews loop back to the drop start on
    *  reaching the drop end instead of pausing. */
   loop?: boolean
@@ -153,11 +160,27 @@ export function VideoPreview({
             top/bottom, wordmark baked in, transparent middle) — the render
             composites it 1:1, so the preview just stretches it over the
             player for pixel-true branding. */}
-        <img
-          src="/edmpapa.png"
-          alt="EDMPAPA"
-          className="absolute inset-0 h-full w-full"
-        />
+        {!brandOverlay.intro && (
+          <img
+            src="/edmpapa.png"
+            alt="EDMPAPA"
+            className="absolute inset-0 h-full w-full"
+          />
+        )}
+        {brandOverlay.intro && (
+          /* Same screen blend the renderer uses: black stays invisible. */
+          <video
+            src="/intro.mp4"
+            autoPlay
+            muted
+            playsInline
+            className="absolute inset-0 h-full w-full object-cover"
+            style={{ mixBlendMode: "screen" }}
+          />
+        )}
+        {brandOverlay.outro && (
+          <div className="absolute inset-0 bg-black" />
+        )}
         {brandOverlay.showTitle && brandOverlay.title && (
           /* Title centered in the bottom bar (140px on the 1080p canvas),
              font 56/1080 — same as the burned-in ASS title. */

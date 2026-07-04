@@ -127,7 +127,7 @@ export function MixesPanel({ progress }: MixesPanelProps) {
       toast.success(`Deleted ${ok} mix${ok === 1 ? "" : "es"}`)
     } else {
       toast.error(`Deleted ${ok}, failed ${failed}`, {
-        description: "Some files could not be removed — list refreshed.",
+        description: "Some files could not be removed. The list has been refreshed.",
       })
     }
     setSelected(new Set())

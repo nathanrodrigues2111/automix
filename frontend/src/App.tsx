@@ -29,6 +29,7 @@ import { ModelStatusBanner } from "@/components/ModelDownloadDialog"
 import { ProjectManager } from "@/components/ProjectManager"
 import { RenderDialog } from "@/components/RenderDialog"
 import { SettingsDialog } from "@/components/SettingsDialog"
+import { Tour, type TourStep } from "@/components/Tour"
 import { useRefreshTitles, useTracks } from "@/api/client"
 import type { Drop, Project, RenderConfig, Track } from "@/api/types"
 import { useLivePreview } from "@/hooks/useLivePreview"
@@ -52,6 +53,38 @@ export interface SeekRequest {
 
 type ActiveTab = "preview" | "mix"
 
+const TOUR_STEPS: TourStep[] = [
+  {
+    target: "automix",
+    title: "Import from YouTube",
+    text: "Paste a playlist or video URL here. Auto-Mix runs the whole pipeline in one click, Import only downloads tracks to the library, and Choose lets you hand-pick tracks from the playlist first.",
+  },
+  {
+    target: "tracks",
+    title: "Your track library",
+    text: "Every imported track with its BPM, key, and detected drops. Hit a drop's play button to audition it, click a drop row to add it to the mix, or run Analyze all after fresh imports. Rename, copy, and batch delete live at the top.",
+  },
+  {
+    target: "preview",
+    title: "Video preview and monitor",
+    text: "Plays the selected track. During a mix preview it becomes the program monitor with the EDMPAPA branding, titles, intro, and outro, exactly like the final render.",
+  },
+  {
+    target: "timeline",
+    title: "Timeline",
+    text: "The selected track's waveform with its beat grid and drop bands. Drag the green and red handles to trim a cut (hold Shift to skip beat snapping), Ctrl+scroll to zoom, and use Add selection to push your custom cut into the mix.",
+  },
+  {
+    target: "mixer",
+    title: "Mix editor",
+    text: "Your mix, clip by clip. Drag to reorder, Auto-order for harmonic (Camelot) flow, Preview to hear the whole mix instantly in the browser, and Render for the final MP4 in videos/exports.",
+  },
+  {
+    title: "Shortcuts",
+    text: "Space plays or pauses anywhere. Ctrl+scroll zooms the timeline. Shift while dragging a handle skips snapping. Arrow keys on a focused handle nudge by 0.1s, or 1s with Shift.",
+  },
+]
+
 const DEFAULT_CONFIG: Omit<RenderConfig, "clips"> = {
   target_bpm: 0, // 0 = auto (mean of the clips' BPMs)
   crossfade_bars: 2, // 2-bar blend = the clips' 2-bar vocal/riser lead-in
@@ -66,6 +99,7 @@ const DEFAULT_CONFIG: Omit<RenderConfig, "clips"> = {
   no_time_stretch: false,
   brand_overlay: true, // EDMPAPA black bars + logo
   show_titles: true, // per-track title overlay
+  outro_s: 20, // black outro reserved for YouTube end screens
   harmonic_pitch_shift_max_semitones: 0, // don't pitch-shift either
 }
 
@@ -178,6 +212,7 @@ export default function App() {
     null,
   )
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [tourStep, setTourStep] = useState<number | null>(null)
   const [tracksDrawerOpen, setTracksDrawerOpen] = useState(false)
   const drawerTouchRef = useRef<{ x: number; y: number } | null>(null)
 
@@ -288,7 +323,7 @@ export default function App() {
 
   // ---- Live mix preview: Web Audio is the master clock; the main video
   // player doubles as the program monitor (muted, video-synced). ----
-  const livePreview = useLivePreview(clips)
+  const livePreview = useLivePreview(clips, config.outro_s ?? 0)
   const clipsRef = useRef(clips)
   clipsRef.current = clips
   const monitorTrackIdRef = useRef<string | null>(null)
@@ -346,6 +381,22 @@ export default function App() {
   const monitorPlayhead =
     livePreview.state.status !== "idle" ? livePreview.getPlayhead() : null
   const monitorClip = monitorPlayhead ? clips[monitorPlayhead.index] : null
+  // Intro/outro simulation, mirroring the render: the intro animation ends
+  // exactly on the first drop's kick (no title underneath it), and the mix
+  // tail shows the black YouTube-end-screen outro.
+  const INTRO_DUR_S = 3
+  const monitorPos = livePreview.state.position
+  const firstKickOut =
+    clips[0]?.kick_s != null ? clips[0].kick_s - clips[0].start_s : 0
+  const monitorIntro =
+    !!monitorClip &&
+    firstKickOut > 0 &&
+    monitorPos >= Math.max(0, firstKickOut - INTRO_DUR_S) &&
+    monitorPos < firstKickOut
+  const monitorOutro =
+    !!monitorClip &&
+    (config.outro_s ?? 0) > 0 &&
+    monitorPos >= livePreview.state.duration - (config.outro_s ?? 0)
 
   const trackById = useMemo(
     () => Object.fromEntries((tracks.data ?? []).map((t) => [t.id, t])),
@@ -441,7 +492,7 @@ export default function App() {
           `BPM mismatch: ${prevBpm.toFixed(0)} → ${t.analysis.bpm.toFixed(0)} (${(diff * 100).toFixed(0)}% off)`,
           {
             description:
-              "Transition may drift — same-BPM picks will sound tighter.",
+              "Transition may drift. Same-BPM picks will sound tighter.",
           },
         )
       }
@@ -523,12 +574,9 @@ export default function App() {
             <h1 className="bg-gradient-to-r from-foreground to-primary bg-clip-text text-lg font-semibold tracking-tight text-transparent">
               Automix
             </h1>
-            <span className="hidden text-xs uppercase tracking-wider text-muted-foreground xl:inline">
-              EDM drop stitcher
-            </span>
           </div>
         </div>
-        <div className="order-last w-full min-w-0 basis-full lg:order-none lg:w-auto lg:max-w-3xl lg:flex-1 lg:basis-auto">
+        <div data-tour="automix" className="order-last w-full min-w-0 basis-full lg:order-none lg:w-auto lg:max-w-3xl lg:flex-1 lg:basis-auto">
           <AutomixPanel progress={progress} variant="header" />
         </div>
         <div className="flex shrink-0 items-center gap-1.5">
@@ -601,7 +649,7 @@ export default function App() {
           gridTemplateColumns: `minmax(0,${colWidths.left}px) 5px minmax(0,1fr) 5px minmax(0,${colWidths.right}px)`,
         }}
       >
-        <aside className="hidden min-h-0 min-w-0 flex-col overflow-hidden border-r border-border/60 bg-card/20 lg:flex">
+        <aside data-tour="tracks" className="hidden min-h-0 min-w-0 flex-col overflow-hidden border-r border-border/60 bg-card/20 lg:flex">
           <div className="flex items-center justify-between px-4 py-3">
             <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-widest text-primary/80">
               <ListMusic className="h-3.5 w-3.5" />
@@ -633,7 +681,7 @@ export default function App() {
           )}
         >
 
-          <Card className="overflow-hidden border-border/60 bg-card/40 backdrop-blur">
+          <Card data-tour="preview" className="overflow-hidden border-border/60 bg-card/40 backdrop-blur">
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
               <CardTitle className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-widest text-primary/80">
                 <Disc3 className="h-3.5 w-3.5" /> Preview
@@ -654,8 +702,8 @@ export default function App() {
                   aria-label="Loop drop previews"
                   title={
                     loopPreviews
-                      ? "Drop previews loop — click to play through instead"
-                      : "Drop previews play through — click to loop"
+                      ? "Drop previews loop. Click to play through instead"
+                      : "Drop previews play through. Click to loop"
                   }
                   onClick={() => setLoopPreviews((v) => !v)}
                   className={cn(
@@ -691,7 +739,9 @@ export default function App() {
                           title: trackById[monitorClip.track_id]
                             ? displayTitle(trackById[monitorClip.track_id])
                             : null,
-                          showTitle: true,
+                          showTitle: !monitorIntro && !monitorOutro,
+                          intro: monitorIntro,
+                          outro: monitorOutro,
                         }
                       : null
                   }
@@ -712,7 +762,7 @@ export default function App() {
             </CardContent>
           </Card>
 
-          <Card className="border-border/60 bg-card/40 backdrop-blur">
+          <Card data-tour="timeline" className="border-border/60 bg-card/40 backdrop-blur">
             <CardContent className="pt-4">
               {selectedTrack ? (
                 <Timeline
@@ -796,7 +846,7 @@ export default function App() {
           className="hidden cursor-col-resize touch-none bg-border/40 transition-colors hover:bg-primary/60 active:bg-primary lg:block"
         />
 
-        <aside
+        <aside data-tour="mixer"
           className={cn(
             "min-h-0 min-w-0 flex-col overflow-hidden border-border/60 bg-card/20 p-4 lg:flex lg:border-l",
             activeTab === "mix" ? "flex flex-1" : "hidden",
@@ -852,6 +902,15 @@ export default function App() {
         </SheetContent>
       </Sheet>
 
+      {tourStep != null && (
+        <Tour
+          steps={TOUR_STEPS}
+          step={tourStep}
+          onStep={setTourStep}
+          onClose={() => setTourStep(null)}
+        />
+      )}
+
       <SettingsDialog
         open={settingsOpen}
         onClose={() => setSettingsOpen(false)}
@@ -860,6 +919,10 @@ export default function App() {
         loopPreviews={loopPreviews}
         onLoopPreviewsChange={setLoopPreviews}
         clipBpms={clipBpms}
+        onStartTour={() => {
+          setSettingsOpen(false)
+          setTourStep(0)
+        }}
       />
       <ProjectManager
         mode={projectDialog}

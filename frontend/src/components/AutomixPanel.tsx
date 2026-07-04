@@ -26,7 +26,12 @@ import {
 import { Input } from "@/components/ui/input"
 import { Player } from "@/components/Player"
 import { Progress } from "@/components/ui/progress"
-import { useAutomix, usePlaylistEntries, useYoutubeImport } from "@/api/client"
+import {
+  useAutomix,
+  useCancelJob,
+  usePlaylistEntries,
+  useYoutubeImport,
+} from "@/api/client"
 import type { PlaylistEntry } from "@/api/types"
 import type { ProgressMap } from "@/hooks/useProgressSocket"
 import { formatDuration } from "@/lib/format"
@@ -64,6 +69,7 @@ export function AutomixPanel({ progress, variant = "card" }: AutomixPanelProps) 
   const automix = useAutomix()
   const youtubeImport = useYoutubeImport()
   const playlistEntries = usePlaylistEntries()
+  const cancelJob = useCancelJob()
 
   // Playlist track chooser.
   const [chooserOpen, setChooserOpen] = useState(false)
@@ -132,7 +138,9 @@ export function AutomixPanel({ progress, variant = "card" }: AutomixPanelProps) 
     if (notifiedJobRef.current === job.id) return
     notifiedJobRef.current = job.id
     qc.invalidateQueries({ queryKey: ["tracks"] })
-    if (p.message.toLowerCase().startsWith("error")) {
+    if (p.message === "Cancelled") {
+      toast.info(job.kind === "automix" ? "Auto-Mix cancelled" : "Import cancelled")
+    } else if (p.message.toLowerCase().startsWith("error")) {
       toast.error(job.kind === "automix" ? "Auto-Mix failed" : "Import failed", {
         description: p.message,
       })
@@ -197,8 +205,14 @@ export function AutomixPanel({ progress, variant = "card" }: AutomixPanelProps) 
       { url: u, max_tracks: parsedMaxTracks() },
       {
         onSuccess: (list) => {
-          setEntries(list)
-          setSelectedIds(new Set(list.map((e) => e.id)))
+          // Dedupe by video id — playlists can contain the same video twice,
+          // which broke the select-all size comparison.
+          const seen = new Set<string>()
+          const unique = list.filter((e) =>
+            seen.has(e.id) ? false : (seen.add(e.id), true),
+          )
+          setEntries(unique)
+          setSelectedIds(new Set(unique.map((e) => e.id)))
           setWholePlaylist(false)
           setChooserOpen(true)
         },
@@ -290,7 +304,7 @@ export function AutomixPanel({ progress, variant = "card" }: AutomixPanelProps) 
               disabled={running}
               size={compact ? "sm" : "default"}
               className={cn(
-                "shrink-0 bg-gradient-to-r from-primary to-fuchsia-500 text-primary-foreground shadow-[0_0_18px_-4px_color-mix(in_oklch,var(--primary)_60%,transparent)] hover:from-primary hover:to-fuchsia-400",
+                "shrink-0 bg-primary text-primary-foreground shadow-[0_0_18px_-4px_color-mix(in_oklch,var(--primary)_60%,transparent)] hover:bg-primary/90",
                 compact && "h-8",
               )}
             >
@@ -363,10 +377,13 @@ export function AutomixPanel({ progress, variant = "card" }: AutomixPanelProps) 
               type="checkbox"
               className="h-3.5 w-3.5 accent-[var(--primary)]"
               disabled={wholePlaylist}
-              checked={entries.length > 0 && selectedIds.size === entries.length}
+              checked={
+                entries.length > 0 &&
+                entries.every((e) => selectedIds.has(e.id))
+              }
               onChange={() =>
                 setSelectedIds(
-                  selectedIds.size === entries.length
+                  entries.every((e) => selectedIds.has(e.id))
                     ? new Set()
                     : new Set(entries.map((e) => e.id)),
                 )
@@ -428,7 +445,7 @@ export function AutomixPanel({ progress, variant = "card" }: AutomixPanelProps) 
             size="sm"
             disabled={!wholePlaylist && selectedIds.size === 0}
             onClick={() => startWithSelection("automix")}
-            className="bg-gradient-to-r from-primary to-fuchsia-500 text-primary-foreground hover:from-primary hover:to-fuchsia-400"
+            className="bg-primary text-primary-foreground hover:bg-primary/90"
           >
             <Wand2 className="h-3.5 w-3.5" /> Auto-Mix{" "}
             {wholePlaylist ? "all" : selectedIds.size}
@@ -526,6 +543,22 @@ export function AutomixPanel({ progress, variant = "card" }: AutomixPanelProps) 
               <span className="ml-auto shrink-0 pl-2 font-mono text-xs tabular-nums text-muted-foreground">
                 {(p?.percent ?? 0).toFixed(0)}%
               </span>
+              {!done && job && (
+                <button
+                  type="button"
+                  disabled={cancelJob.isPending}
+                  onClick={() =>
+                    cancelJob.mutate(job.id, {
+                      onError: (e) =>
+                        toast.error(`Cancel failed: ${e.message}`),
+                    })
+                  }
+                  title="Cancel this job"
+                  className="shrink-0 rounded-md border border-destructive/40 bg-destructive/10 px-2 py-0.5 text-[11px] font-medium text-destructive transition-colors hover:bg-destructive/20 disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-ring"
+                >
+                  Cancel
+                </button>
+              )}
             </div>
             <Progress value={p?.percent ?? 0} />
             <div
@@ -590,7 +623,16 @@ export function AutomixPanel({ progress, variant = "card" }: AutomixPanelProps) 
           </div>
         )}
 
-        {done && !isError && job?.kind === "import" && (
+        {done && p?.message === "Cancelled" && (
+          <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border/60 bg-muted/30 p-3">
+            <span className="text-sm text-muted-foreground">Job cancelled</span>
+            <Button variant="ghost" size="sm" onClick={reset} className="h-7 text-xs">
+              <RotateCcw className="h-3 w-3" /> Start over
+            </Button>
+          </div>
+        )}
+
+        {done && !isError && p?.message !== "Cancelled" && job?.kind === "import" && (
           <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-3">
             <span className="flex min-w-0 items-center gap-2 text-sm font-medium text-emerald-600 dark:text-emerald-400">
               <CheckCircle2 className="h-4 w-4 shrink-0" />
@@ -623,7 +665,7 @@ export function AutomixPanel({ progress, variant = "card" }: AutomixPanelProps) 
                 <Button
                   asChild
                   size="sm"
-                  className="bg-gradient-to-r from-primary to-fuchsia-500 text-primary-foreground hover:from-primary hover:to-fuchsia-400"
+                  className="bg-primary text-primary-foreground hover:bg-primary/90"
                 >
                   <a href={`/${outputPath}`} download={fileName ?? true}>
                     <Download className="h-3.5 w-3.5" /> Download
@@ -677,7 +719,7 @@ export function AutomixPanel({ progress, variant = "card" }: AutomixPanelProps) 
           <div className="min-w-0">
             <h2 className="text-sm font-semibold tracking-tight">Auto-Mix</h2>
             <p className="truncate text-xs text-muted-foreground">
-              Paste a YouTube playlist — download, analyze &amp; render a
+              Paste a YouTube playlist to download, analyze, and render a
               seamless drop mix in one click
             </p>
           </div>

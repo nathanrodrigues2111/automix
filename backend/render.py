@@ -534,6 +534,7 @@ def _apply_branding(
     out_path: Path,
     title_windows: list[tuple[str, float, float]],
     proxy: bool,
+    brand_start: float = 0.0,
 ) -> None:
     """EDMPAPA branding pass: crop-fill to 1920x1080, draw black letterbox
     bars OVER the video (top+bottom, 140px), overlay the logo in the top bar
@@ -548,11 +549,14 @@ def _apply_branding(
 
     filters: list[str] = []
     label = "base"
+    # brand_start > 0: the bars/logo stay hidden under the intro animation
+    # and pop in exactly when it ends (on the first drop's kick).
+    en = f":enable='gte(t,{brand_start:.3f})'" if brand_start > 0 else ""
     filters.append(
         f"[0:v]scale={_BRAND_W}:{_BRAND_H}:force_original_aspect_ratio=increase,"
         f"crop={_BRAND_W}:{_BRAND_H},setsar=1,"
-        f"drawbox=x=0:y=0:w=iw:h={_BAR_H}:color=black:t=fill,"
-        f"drawbox=x=0:y=ih-{_BAR_H}:w=iw:h={_BAR_H}:color=black:t=fill[{label}]"
+        f"drawbox=x=0:y=0:w=iw:h={_BAR_H}:color=black:t=fill{en},"
+        f"drawbox=x=0:y=ih-{_BAR_H}:w=iw:h={_BAR_H}:color=black:t=fill{en}[{label}]"
     )
     if have_logo:
         try:
@@ -563,12 +567,12 @@ def _apply_branding(
             # edmpapa11.png is a ready-made full-frame overlay (opaque bars
             # top/bottom with the wordmark baked in, transparent middle) —
             # composite it 1:1 instead of shrinking the whole frame to 84px.
-            filters.append(f"[{label}][1:v]overlay=x=0:y=0[branded]")
+            filters.append(f"[{label}][1:v]overlay=x=0:y=0{en}[branded]")
         else:
             filters.append(f"[1:v]scale=-1:{_LOGO_H}[logo]")
             filters.append(
                 f"[{label}][logo]overlay=x=W-w-{_LOGO_MARGIN_RIGHT}:"
-                f"y=({_BAR_H}-{_LOGO_H})/2[branded]"
+                f"y=({_BAR_H}-{_LOGO_H})/2{en}[branded]"
             )
         label = "branded"
     try:
@@ -674,6 +678,111 @@ def _xfade_videos(
     subprocess.run(cmd, check=True, capture_output=True)
 
 
+def _overlay_intro(
+    video: Path,
+    intro: Path,
+    end_t: float,
+    intro_dur: float,
+    work: Path,
+    proxy: bool,
+) -> None:
+    """Screen-blend the intro animation over the mix so it ENDS exactly on
+    the first drop's kick (`end_t`). Screen blend keeps black invisible, so
+    the intro is padded with black on both sides and blended full-length —
+    no enable-window edge cases. Failure never kills the render."""
+    try:
+        info = ffprobe_streams(video)
+        w = int(info.get("width") or 1920)
+        h = int(info.get("height") or 1080)
+        fps = info.get("fps") or "30"
+        start = max(0.0, end_t - intro_dur)
+        out = work / "with_intro.mp4"
+        filt = (
+            f"[1:v]scale={w}:{h},setsar=1,fps={fps},format=gbrp,"
+            f"tpad=start_duration={start:.3f}:start_mode=add:color=black:"
+            f"stop=-1:stop_mode=add:color=black[ov];"
+            f"[0:v]format=gbrp[base];"
+            f"[base][ov]blend=all_mode=screen:shortest=1,format=yuv420p[v]"
+        )
+        cmd = [
+            "ffmpeg", "-y", "-i", str(video), "-i", str(intro),
+            "-filter_complex", filt,
+            "-map", "[v]", "-map", "0:a?",
+            *_x264_encode_args(proxy),
+            "-pix_fmt", "yuv420p",
+            "-c:a", "copy",
+            "-movflags", "+faststart",
+            str(out),
+        ]
+        subprocess.run(cmd, check=True, capture_output=True)
+        shutil.move(str(out), str(video))
+    except Exception as e:
+        print(f"[intro] overlay failed, keeping mix without intro: {e}")
+
+
+def _append_black_outro(video: Path, outro_s: float, work: Path) -> None:
+    """Append a black + silent outro for YouTube end screens (they occupy
+    the last 5-20s of a video, so 20s is the standard reservation). Encodes
+    a matching black segment and concat-copies it — no full re-encode."""
+    try:
+        info = ffprobe_streams(video)
+    except Exception:
+        info = {}
+    w = int(info.get("width") or 1920)
+    h = int(info.get("height") or 1080)
+    fps = info.get("fps") or "30"
+    black = work / "outro_black.mp4"
+    cmd = [
+        "ffmpeg", "-y",
+        "-f", "lavfi", "-i", f"color=black:s={w}x{h}:r={fps}",
+        "-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo",
+        "-t", f"{outro_s:.3f}",
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
+        "-pix_fmt", "yuv420p",
+        "-c:a", "aac", "-b:a", "320k", "-ar", "44100", "-ac", "2",
+        str(black),
+    ]
+    subprocess.run(cmd, check=True, capture_output=True)
+    joined = work / "with_outro.mp4"
+    with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as f:
+        f.write(f"file '{video.resolve()}'\nfile '{black.resolve()}'\n")
+        list_path = f.name
+    try:
+        cmd = [
+            "ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", list_path,
+            "-c", "copy", "-movflags", "+faststart", str(joined),
+        ]
+        subprocess.run(cmd, check=True, capture_output=True)
+        shutil.move(str(joined), str(video))
+    except Exception:
+        # Concat-copy can fail on parameter-set mismatches — the mix is
+        # still complete without the outro, so never fail the render on it.
+        print("[outro] concat failed, keeping mix without outro")
+    finally:
+        Path(list_path).unlink(missing_ok=True)
+
+
+def ffprobe_streams(path: Path) -> dict:
+    """Width/height/fps of the first video stream."""
+    out = subprocess.run(
+        [
+            "ffprobe", "-v", "error", "-select_streams", "v:0",
+            "-show_entries", "stream=width,height,r_frame_rate",
+            "-of", "json", str(path),
+        ],
+        check=True, capture_output=True,
+    ).stdout
+    s = (json.loads(out).get("streams") or [{}])[0]
+    fps = s.get("r_frame_rate", "30/1")
+    try:
+        num, den = fps.split("/")
+        fps_val = float(num) / float(den)
+        fps = str(int(fps_val)) if abs(fps_val - round(fps_val)) < 1e-6 else f"{fps_val:.3f}"
+    except Exception:
+        fps = "30"
+    return {"width": s.get("width"), "height": s.get("height"), "fps": fps}
+
+
 def _concat_videos(parts: list[Path], out_path: Path, proxy: bool = False) -> None:
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as f:
@@ -700,6 +809,7 @@ def render_mix(
     config: dict[str, Any],
     track_resolver: Callable[[str], Path],
     progress: ProgressCb = None,
+    cancel: Callable[[], bool] | None = None,
 ) -> dict[str, Any]:
     """Main render pipeline.
 
@@ -758,6 +868,18 @@ def render_mix(
     RENDER_TMP_DIR.mkdir(parents=True, exist_ok=True)
     work = Path(tempfile.mkdtemp(prefix="automix_", dir=str(RENDER_TMP_DIR)))
 
+    # Intro overlay (screen-blended over the first clip's buildup, timed to
+    # end exactly on the first drop's kick). Default: assets/into.avi.
+    intro_cfg = config.get("intro_path")
+    intro_path = Path(intro_cfg) if intro_cfg else (ASSETS_DIR / "into.avi")
+    intro_dur = 0.0
+    if config.get("intro_overlay", True) and intro_path.exists():
+        try:
+            intro_dur = _probe_duration(intro_path)
+        except Exception:
+            intro_dur = 0.0
+    first_kick_out = 0.0
+
     if progress:
         progress("render", 1.0, f"Preparing clips (target {target_bpm:.1f} BPM)")
 
@@ -766,8 +888,13 @@ def render_mix(
     clip_stems: list[dict[str, Path] | None] = []
     clip_ratios: list[float] = []
 
+    def _check_cancel() -> None:
+        if cancel and cancel():
+            raise RuntimeError("cancelled")
+
     n_clips = len(clips)
     for idx, clip in enumerate(clips):
+        _check_cancel()
         src = srcs[idx]
         cached = analyses[idx]
         src_bpm = float(cached["bpm"])
@@ -793,6 +920,12 @@ def render_mix(
                         src_bpm = bpm_k
                     break
 
+        # Stretch ratio (needed below for lead-in math in OUTPUT time).
+        # no_stretch: each clip plays at its source BPM (target ignored).
+        pre_ratio = 1.0 if no_stretch else (src_bpm / target_bpm)
+        if abs(pre_ratio - 1.0) > 0.08:
+            pre_ratio = 1.0
+
         raw_start = float(clip["start_s"])
         # Transition lead-in: normalize every kick-anchored clip to start
         # exactly 2 bars before its kick. That lead-in carries the incoming
@@ -803,8 +936,16 @@ def render_mix(
         kick = clip.get("kick_s")
         if kick is not None and src_bpm > 0:
             breath = 8.0 * 60.0 / src_bpm
+            if idx == 0 and intro_dur > 0:
+                # The intro overlay must fit inside the first clip's buildup
+                # (it ends exactly on the first kick).
+                breath = max(breath, (intro_dur + 0.25) / pre_ratio)
             raw_start = max(0.0, float(kick) - breath)
             clip["start_s"] = raw_start  # _crossfade_for reads this
+        if idx == 0:
+            first_kick_out = (
+                (float(kick) - raw_start) * pre_ratio if kick is not None else 0.0
+            )
         explicit_end = clip.get("end_s")
         # If the caller supplied an explicit end_s (e.g. from a detected drop),
         # honour it exactly: no start-snap, no end-snap, no length math.
@@ -821,13 +962,7 @@ def render_mix(
                 snapped_end = _snap_to_downbeat(implied_end, downbeats)
                 if snapped_end > start_s:
                     clip_len_s = snapped_end - start_s
-        # no_stretch: each clip plays at its source BPM (no time-stretch at all).
-        # target_bpm is ignored in this mode.
-        out_ratio = 1.0 if no_stretch else (src_bpm / target_bpm)
-        # Beat-matching only works cleanly for small stretches; beyond ±8%
-        # the artifacts outweigh the alignment, so that clip stays native.
-        if abs(out_ratio - 1.0) > 0.08:
-            out_ratio = 1.0
+        out_ratio = pre_ratio
         clip_ratios.append(out_ratio)
 
         clip_dir = work / f"clip_{idx:02d}"
@@ -1004,6 +1139,7 @@ def render_mix(
     current_audio = clip_audios[0]
     crossfade_durations: list[float] = []
     for i in range(1, n_clips):
+        _check_cancel()
         merged = work / f"merged_{i:02d}.wav"
         a_stems = clip_stems[i - 1]
         b_stems = clip_stems[i]
@@ -1035,6 +1171,7 @@ def render_mix(
     # the audio mix (the audio side overlaps by `crossfade_durations[i]` per
     # transition; the video must do the same or `-shortest` mux will cut off
     # the last clip).
+    _check_cancel()
     if progress:
         progress("render", 85.0, "Crossfading video")
     concat_video = work / "video_concat.mp4"
@@ -1053,6 +1190,21 @@ def render_mix(
             proxy=proxy, durations=audio_lens,
         )
 
+    # Gentle tail fade so the mix doesn't stop on a hard cut before the outro.
+    outro_s = float(config.get("outro_s", 20.0))
+    if outro_s > 0:
+        try:
+            import soundfile as sf
+            y_fin, sr_fin = sf.read(str(final_audio), always_2d=True)
+            n_fade = min(len(y_fin), int(1.5 * sr_fin))
+            if n_fade > 0:
+                curve = np.cos(np.linspace(0, np.pi / 2, n_fade))[:, None]
+                y_fin[-n_fade:] = y_fin[-n_fade:] * curve
+                sf.write(str(final_audio), y_fin, sr_fin)
+        except Exception:
+            pass
+
+    _check_cancel()
     if progress:
         progress("render", 93.0, "Muxing")
     ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
@@ -1074,10 +1226,28 @@ def render_mix(
                 for p in clip_audios
             ]
             spans = compute_title_windows(durations, crossfade_durations)
+            if intro_dur > 0 and first_kick_out > 0 and spans:
+                # No title under the intro animation — the first title
+                # appears when the intro ends (on the first kick).
+                s0, e0 = spans[0]
+                spans[0] = (min(first_kick_out, max(s0, e0 - 0.1)), e0)
             windows = [(titles[i], s, e) for i, (s, e) in enumerate(spans)]
-        _apply_branding(muxed, out_path, windows, proxy)
+        _apply_branding(
+            muxed, out_path, windows, proxy,
+            brand_start=first_kick_out if intro_dur > 0 else 0.0,
+        )
     else:
         _mux_video_audio(concat_video, final_audio, out_path)
+
+    if intro_dur > 0 and first_kick_out > 0:
+        if progress:
+            progress("render", 97.0, "Compositing intro overlay")
+        _overlay_intro(out_path, intro_path, first_kick_out, intro_dur, work, proxy)
+
+    if outro_s > 0:
+        if progress:
+            progress("render", 98.0, "Appending YouTube outro")
+        _append_black_outro(out_path, outro_s, work)
 
     render_id = uuid.uuid4().hex
     record = db.add_render(render_id, str(out_path.relative_to(PROJECT_ROOT)), config)

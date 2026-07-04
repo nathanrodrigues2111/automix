@@ -2,7 +2,9 @@ import { useEffect, useRef, useState } from "react"
 import {
   Check,
   Copy,
+  Globe,
   Loader2,
+  Search,
   Music,
   Pause,
   Pencil,
@@ -15,11 +17,21 @@ import {
 import { toast } from "sonner"
 import { useQueryClient } from "@tanstack/react-query"
 import { Button } from "@/components/ui/button"
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
 import { Badge } from "@/components/ui/badge"
 import { Progress } from "@/components/ui/progress"
 import {
   useAnalyze,
+  useAnalyzeAll,
+  useCancelJob,
   useDeleteTrack,
+  useRefreshTitles,
   useRenameTrack,
   useTracks,
 } from "@/api/client"
@@ -60,7 +72,37 @@ export function TrackList({
   const analyze = useAnalyze()
   const deleteTrack = useDeleteTrack()
   const renameTrack = useRenameTrack()
+  const analyzeAll = useAnalyzeAll()
+  const cancelJob = useCancelJob()
   const [jobByTrack, setJobByTrack] = useState<Record<string, string>>({})
+
+  // "Analyze all" runs as one sequential backend job.
+  const [allJobId, setAllJobId] = useState<string | null>(null)
+  const allP = allJobId ? progress[allJobId] : undefined
+  const allRunning = !!allJobId && !allP?.done
+  const allNotifiedRef = useRef<string | null>(null)
+  useEffect(() => {
+    if (!allJobId || !allP?.done) return
+    if (allNotifiedRef.current === allJobId) return
+    allNotifiedRef.current = allJobId
+    tracks.refetch()
+    if (allP.message === "Cancelled") toast.info("Analysis cancelled")
+    else if (allP.message.toLowerCase().startsWith("error"))
+      toast.error(`Analyze all failed: ${allP.message}`)
+    else toast.success(allP.message || "Analysis complete")
+    setAllJobId(null)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [allJobId, allP])
+
+  const startAnalyzeAll = () => {
+    analyzeAll.mutate(undefined, {
+      onSuccess: (res) => setAllJobId(res.job_id),
+      onError: (e) => toast.error(`Analyze all failed: ${e.message}`),
+    })
+  }
+
+  // Search filter.
+  const [query, setQuery] = useState("")
 
   // Inline title editing.
   const [editingId, setEditingId] = useState<string | null>(null)
@@ -82,6 +124,63 @@ export function TrackList({
         onError: (e) => toast.error(`Rename failed: ${e.message}`),
       },
     )
+  }
+
+  // Bulk rename modal: edit every title in one place.
+  const refreshTitles = useRefreshTitles()
+  const [bulkOpen, setBulkOpen] = useState(false)
+  const [bulkEdits, setBulkEdits] = useState<Record<string, string>>({})
+  const [bulkSaving, setBulkSaving] = useState(false)
+
+  const openBulkRename = () => {
+    const map: Record<string, string> = {}
+    for (const t of tracks.data ?? []) map[t.id] = displayTitle(t)
+    setBulkEdits(map)
+    setBulkOpen(true)
+  }
+
+  const saveBulkRename = async () => {
+    const list = tracks.data ?? []
+    const changed = list.filter(
+      (t) =>
+        bulkEdits[t.id] != null &&
+        bulkEdits[t.id].trim() &&
+        bulkEdits[t.id].trim() !== displayTitle(t),
+    )
+    if (changed.length === 0) {
+      setBulkOpen(false)
+      return
+    }
+    setBulkSaving(true)
+    const results = await Promise.allSettled(
+      changed.map((t) =>
+        renameTrack.mutateAsync({ trackId: t.id, title: bulkEdits[t.id].trim() }),
+      ),
+    )
+    setBulkSaving(false)
+    const ok = results.filter((r) => r.status === "fulfilled").length
+    const failed = results.length - ok
+    if (failed === 0) toast.success(`Renamed ${ok} track${ok === 1 ? "" : "s"}`)
+    else toast.error(`Renamed ${ok}, failed ${failed}`)
+    setBulkOpen(false)
+    qc.invalidateQueries({ queryKey: ["tracks"] })
+  }
+
+  const fetchTitlesOnline = () => {
+    refreshTitles.mutate(undefined, {
+      onSuccess: async (res) => {
+        toast.success(
+          res.updated > 0
+            ? `Fetched ${res.updated} title${res.updated === 1 ? "" : "s"} from catalog`
+            : "Titles already match the online catalog",
+        )
+        const fresh = await tracks.refetch()
+        const map: Record<string, string> = {}
+        for (const t of fresh.data ?? []) map[t.id] = displayTitle(t)
+        setBulkEdits(map)
+      },
+      onError: (e) => toast.error(`Fetch failed: ${e.message}`),
+    })
   }
 
   const copyTitle = async (t: Track) => {
@@ -162,7 +261,7 @@ export function TrackList({
       toast.success(`Deleted ${ok} track${ok === 1 ? "" : "s"}`)
     } else {
       toast.error(`Deleted ${ok}, failed ${failed}`, {
-        description: "Some tracks could not be removed — list refreshed.",
+        description: "Some tracks could not be removed. The list has been refreshed.",
       })
     }
     setSelectedIds(new Set())
@@ -225,7 +324,16 @@ export function TrackList({
     )
   }
 
+  const q = query.trim().toLowerCase()
+  const visibleItems = q
+    ? items.filter(
+        (t) =>
+          displayTitle(t).toLowerCase().includes(q) ||
+          t.filename.toLowerCase().includes(q),
+      )
+    : items
   const allSelected = items.length > 0 && selectedIds.size === items.length
+  const unanalyzedCount = items.filter((t) => !t.analyzed).length
 
   return (
     <div className="flex h-full min-w-0 flex-col overflow-hidden">
@@ -239,6 +347,48 @@ export function TrackList({
           >
             {selectMode ? "Done" : "Select"}
           </Button>
+          {!selectMode && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                setSelectMode(true)
+                setSelectedIds(new Set(items.map((t) => t.id)))
+              }}
+              title="Select every track (then Delete selected)"
+              className="h-6 px-2 text-xs text-muted-foreground"
+            >
+              Select all
+            </Button>
+          )}
+          {!selectMode && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={openBulkRename}
+              title="Rename all tracks in one place"
+              className="h-6 px-2 text-xs text-muted-foreground"
+            >
+              Rename
+            </Button>
+          )}
+          {!selectMode && unanalyzedCount > 0 && (
+            <Button
+              variant="ghost"
+              size="sm"
+              disabled={allRunning || analyzeAll.isPending}
+              onClick={startAnalyzeAll}
+              title="Analyze every track that hasn't been analyzed yet"
+              className="h-6 px-2 text-xs text-muted-foreground"
+            >
+              {allRunning || analyzeAll.isPending ? (
+                <Loader2 className="h-3 w-3 animate-spin" />
+              ) : (
+                <Sparkles className="h-3 w-3" />
+              )}
+              Analyze all ({unanalyzedCount})
+            </Button>
+          )}
           {selectMode && (
             <label className="flex cursor-pointer items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground">
               <input
@@ -277,9 +427,55 @@ export function TrackList({
         )}
       </div>
 
+      <div className="border-b border-border/40 px-2 py-1.5">
+        <div className="relative">
+          <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground/60" />
+          <input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search tracks"
+            aria-label="Search tracks"
+            className="h-7 w-full rounded-md border border-border/60 bg-background/60 pl-7 pr-2 text-xs focus-visible:outline-2 focus-visible:outline-ring"
+          />
+        </div>
+      </div>
+
+      {allRunning && (
+        <div className="space-y-1 border-b border-border/40 px-3 py-2">
+          <div className="flex items-center gap-2">
+            <Progress value={allP?.percent ?? 0} className="h-1 flex-1" />
+            <span className="shrink-0 font-mono text-[10px] tabular-nums text-muted-foreground">
+              {(allP?.percent ?? 0).toFixed(0)}%
+            </span>
+            <button
+              type="button"
+              disabled={cancelJob.isPending}
+              onClick={() =>
+                allJobId &&
+                cancelJob.mutate(allJobId, {
+                  onError: (e) => toast.error(`Cancel failed: ${e.message}`),
+                })
+              }
+              title="Cancel analysis"
+              className="shrink-0 rounded border border-destructive/40 bg-destructive/10 px-1.5 text-[10px] font-medium text-destructive transition-colors hover:bg-destructive/20 disabled:opacity-50"
+            >
+              Cancel
+            </button>
+          </div>
+          <div className="truncate text-[11px] text-muted-foreground" title={allP?.message}>
+            {allP?.message || "Starting…"}
+          </div>
+        </div>
+      )}
+
       <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden">
+      {q && visibleItems.length === 0 && (
+        <div className="px-3 py-6 text-center text-xs text-muted-foreground">
+          No tracks match "{query.trim()}"
+        </div>
+      )}
       <ul className="min-w-0 divide-y divide-border/40">
-        {items.map((t) => {
+        {visibleItems.map((t) => {
           const jobId = jobByTrack[t.id]
           const p = jobId ? progress[jobId] : undefined
           const isAnalyzing = !!jobId && (!p || !p.done)
@@ -588,6 +784,58 @@ export function TrackList({
         })}
       </ul>
       </div>
+
+      <Dialog open={bulkOpen} onOpenChange={setBulkOpen}>
+        <DialogContent className="flex max-h-[80vh] flex-col sm:max-w-xl">
+          <DialogHeader>
+            <DialogTitle>Rename tracks</DialogTitle>
+          </DialogHeader>
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={refreshTitles.isPending}
+            onClick={fetchTitlesOnline}
+            title="Look up canonical titles on Deezer/iTunes and fill them in"
+            className="self-start text-xs"
+          >
+            {refreshTitles.isPending ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Globe className="h-3.5 w-3.5" />
+            )}
+            Fetch proper titles online
+          </Button>
+          <ul className="min-h-0 flex-1 space-y-1.5 overflow-y-auto pr-1">
+            {(tracks.data ?? []).map((t) => (
+              <li key={t.id} className="flex items-center gap-2">
+                <span
+                  className="w-28 shrink-0 truncate text-[11px] text-muted-foreground"
+                  title={t.filename}
+                >
+                  {t.filename}
+                </span>
+                <input
+                  value={bulkEdits[t.id] ?? ""}
+                  onChange={(e) =>
+                    setBulkEdits((prev) => ({ ...prev, [t.id]: e.target.value }))
+                  }
+                  className="h-8 min-w-0 flex-1 rounded-md border border-border bg-background px-2 text-sm focus-visible:outline-2 focus-visible:outline-ring"
+                  aria-label={`Title for ${t.filename}`}
+                />
+              </li>
+            ))}
+          </ul>
+          <DialogFooter>
+            <Button variant="outline" size="sm" onClick={() => setBulkOpen(false)}>
+              Cancel
+            </Button>
+            <Button size="sm" disabled={bulkSaving} onClick={saveBulkRename}>
+              {bulkSaving && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+              Save changes
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

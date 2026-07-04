@@ -18,7 +18,7 @@ const Progress = React.forwardRef<
     <ProgressPrimitive.Indicator
       className={cn(
         "relative h-full w-full flex-1 rounded-full",
-        "bg-gradient-to-r from-primary via-fuchsia-500 to-primary",
+        "bg-primary",
         "shadow-[0_0_10px_-1px_color-mix(in_oklch,var(--primary)_70%,transparent)]",
         "transition-transform duration-500 ease-out",
         // moving sheen so active progress reads as alive, not stuck

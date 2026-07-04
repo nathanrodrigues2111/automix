@@ -6,6 +6,13 @@ import {
   SheetDescription,
   SheetTitle,
 } from "@/components/ui/sheet"
+import { Button } from "@/components/ui/button"
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import {
@@ -20,6 +27,8 @@ import { Slider } from "@/components/ui/slider"
 import { Switch } from "@/components/ui/switch"
 import { cn } from "@/lib/utils"
 import { setThemePref, useThemePref, type ThemePref } from "@/lib/theme"
+import { ACCENTS, isPresetAccent, loadAccent, setAccent } from "@/lib/accent"
+import { APP_VERSION, CHANGELOG } from "@/changelog"
 import type { RenderConfig } from "@/api/types"
 
 type BpmMode = "first" | "median" | "manual"
@@ -34,6 +43,7 @@ interface SettingsDialogProps {
   /** BPMs of the clips currently in the mix, in order — used by the
    *  "first"/"median" target-BPM modes. */
   clipBpms: number[]
+  onStartTour?: () => void
 }
 
 export function SettingsDialog({
@@ -44,6 +54,7 @@ export function SettingsDialog({
   loopPreviews,
   onLoopPreviewsChange,
   clipBpms,
+  onStartTour,
 }: SettingsDialogProps) {
   const [bpmMode, setBpmMode] = useState<BpmMode>("first")
   const themePref = useThemePref()
@@ -58,6 +69,9 @@ export function SettingsDialog({
   }
 
   const nativeBpm = config.no_time_stretch ?? true
+  const [accent, setAccentState] = useState<string | null>(() => loadAccent())
+  const [changelogOpen, setChangelogOpen] = useState(false)
+  const [legalOpen, setLegalOpen] = useState(false)
 
   return (
     <Sheet open={open} onOpenChange={(o) => !o && onClose()}>
@@ -73,13 +87,17 @@ export function SettingsDialog({
             Settings
           </SheetTitle>
           <SheetDescription className="text-[13px] leading-relaxed text-muted-foreground">
-            Saved automatically — applies to the next preview or render.
+            Saved automatically. Applies to the next preview or render.
           </SheetDescription>
         </div>
 
         <div className="min-h-0 flex-1 space-y-7 overflow-y-auto px-6 py-6">
-          <section className="space-y-4">
+          <section className="space-y-5">
             <SectionLabel>Appearance</SectionLabel>
+            <div className="space-y-3">
+              <Label className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+                Theme
+              </Label>
             <div className="grid grid-cols-3 gap-2" role="radiogroup" aria-label="Theme">
               {(
                 [
@@ -105,6 +123,74 @@ export function SettingsDialog({
                   {label}
                 </button>
               ))}
+            </div>
+            </div>
+
+            <div className="space-y-3">
+              <Label className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+                Accent color
+              </Label>
+              <div
+                className="flex flex-wrap items-center gap-3 pt-1"
+                role="radiogroup"
+                aria-label="Accent color"
+              >
+                {ACCENTS.map((a) => {
+                  const selected =
+                    accent === a.value || (!accent && a.name === "Violet")
+                  return (
+                    <button
+                      key={a.name}
+                      type="button"
+                      role="radio"
+                      aria-checked={selected}
+                      title={a.name}
+                      onClick={() => {
+                        const v = a.name === "Violet" ? null : a.value
+                        setAccent(v)
+                        setAccentState(v)
+                      }}
+                      className={cn(
+                        "h-8 w-8 rounded-full ring-offset-2 ring-offset-background transition-shadow",
+                        selected
+                          ? "ring-2 ring-foreground/70"
+                          : "ring-1 ring-border hover:ring-foreground/40",
+                      )}
+                      style={{ backgroundColor: a.value }}
+                    />
+                  )
+                })}
+                {/* Custom color: native picker behind a rainbow swatch. */}
+                <label
+                  title="Custom color"
+                  className={cn(
+                    "relative h-8 w-8 cursor-pointer rounded-full ring-offset-2 ring-offset-background transition-shadow",
+                    !isPresetAccent(accent)
+                      ? "ring-2 ring-foreground/70"
+                      : "ring-1 ring-border hover:ring-foreground/40",
+                  )}
+                  style={{
+                    background: !isPresetAccent(accent)
+                      ? (accent ?? undefined)
+                      : "conic-gradient(from 0deg, #f43f5e, #f59e0b, #84cc16, #06b6d4, #6366f1, #d946ef, #f43f5e)",
+                  }}
+                >
+                  <input
+                    type="color"
+                    aria-label="Custom accent color"
+                    value={
+                      !isPresetAccent(accent) && accent?.startsWith("#")
+                        ? accent
+                        : "#8b5cf6"
+                    }
+                    onChange={(e) => {
+                      setAccent(e.target.value)
+                      setAccentState(e.target.value)
+                    }}
+                    className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
+                  />
+                </label>
+              </div>
             </div>
           </section>
 
@@ -254,6 +340,148 @@ export function SettingsDialog({
               onChange={onLoopPreviewsChange}
             />
           </section>
+          <Separator className="bg-border/50" />
+
+          <section className="space-y-3">
+            <SectionLabel>Help</SectionLabel>
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-[12px] text-muted-foreground">
+                New here? Take the guided tour of the app.
+              </span>
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-7 shrink-0 text-xs"
+                onClick={() => onStartTour?.()}
+              >
+                Start tour
+              </Button>
+            </div>
+          </section>
+
+          <Separator className="bg-border/50" />
+
+          <section className="space-y-3">
+            <SectionLabel>What&apos;s new</SectionLabel>
+            <div className="flex items-center justify-between gap-2">
+              <div className="min-w-0">
+                <div className="truncate text-sm font-medium">
+                  {CHANGELOG[0]?.title}
+                </div>
+                <div className="font-mono text-[10px] tabular-nums text-muted-foreground/70">
+                  v{APP_VERSION} · {CHANGELOG[0]?.date}
+                </div>
+              </div>
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-7 shrink-0 text-xs"
+                onClick={() => setChangelogOpen(true)}
+              >
+                View changelog
+              </Button>
+            </div>
+          </section>
+
+          <Separator className="bg-border/50" />
+
+          <section className="space-y-3">
+            <SectionLabel>Credits</SectionLabel>
+            <div className="space-y-1.5 text-[12px] leading-relaxed text-muted-foreground">
+              <div>
+                <span className="font-medium text-foreground">Automix</span>{" "}
+                v{APP_VERSION}, built for{" "}
+                <span className="font-medium text-foreground">EDMPAPA</span> by
+                Nathan Rodrigues.
+              </div>
+              <div className="text-muted-foreground/80">
+                Powered by yt-dlp, FFmpeg, librosa, FastAPI, React, WaveSurfer
+                &amp; Vidstack.
+              </div>
+            </div>
+
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-[12px] text-muted-foreground">
+                A local-only tool. See the privacy notes &amp; disclaimer.
+              </span>
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-7 shrink-0 text-xs"
+                onClick={() => setLegalOpen(true)}
+              >
+                Privacy &amp; disclaimer
+              </Button>
+            </div>
+          </section>
+
+          <Dialog open={legalOpen} onOpenChange={setLegalOpen}>
+            <DialogContent className="flex max-h-[80vh] flex-col sm:max-w-md">
+              <DialogHeader>
+                <DialogTitle>Privacy &amp; disclaimer</DialogTitle>
+              </DialogHeader>
+              <div className="min-h-0 flex-1 space-y-4 overflow-y-auto pr-1">
+                <div className="space-y-1.5">
+                  <div className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+                    Privacy
+                  </div>
+                  <p className="text-[13px] leading-relaxed text-muted-foreground">
+                    Everything runs on this machine. Downloads, analysis, and
+                    renders never leave your computer, and there are no
+                    analytics. Network requests only go out to YouTube
+                    (downloads) and Deezer/iTunes (title lookups) when you use
+                    those features.
+                  </p>
+                </div>
+                <div className="space-y-1.5">
+                  <div className="text-[11px] font-medium uppercase tracking-wider text-amber-600 dark:text-amber-400">
+                    Warning
+                  </div>
+                  <p className="text-[13px] leading-relaxed text-muted-foreground">
+                    Downloading YouTube content may breach YouTube&apos;s Terms
+                    of Service, and the music is copyrighted. Keep mixes for
+                    personal use unless you have the rights to the tracks.
+                    You are responsible for anything you publish. Not
+                    affiliated with YouTube or any label.
+                  </p>
+                </div>
+              </div>
+            </DialogContent>
+          </Dialog>
+
+          <Dialog open={changelogOpen} onOpenChange={setChangelogOpen}>
+            <DialogContent className="flex max-h-[80vh] flex-col sm:max-w-md">
+              <DialogHeader>
+                <DialogTitle>Changelog</DialogTitle>
+              </DialogHeader>
+              <div className="min-h-0 flex-1 space-y-5 overflow-y-auto pr-1">
+                {CHANGELOG.map((entry, i) => (
+                  <div key={i} className="space-y-1.5">
+                    <div className="flex items-baseline justify-between gap-2">
+                      <span className="min-w-0 truncate text-sm font-medium">
+                        <span className="mr-2 rounded bg-primary/15 px-1.5 py-0.5 font-mono text-[10px] tabular-nums text-primary">
+                          v{entry.version}
+                        </span>
+                        {entry.title}
+                      </span>
+                      <span className="shrink-0 font-mono text-[10px] tabular-nums text-muted-foreground/70">
+                        {entry.date}
+                      </span>
+                    </div>
+                    <ul className="space-y-1 text-[12px] leading-relaxed text-muted-foreground">
+                      {entry.items.map((it, j) => (
+                        <li key={j} className="flex gap-1.5">
+                          <span className="text-primary/70">•</span>
+                          <span>{it}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ))}
+              </div>
+            </DialogContent>
+          </Dialog>
+
         </div>
       </SheetContent>
     </Sheet>

@@ -154,6 +154,22 @@ export function useYoutubeImport() {
   })
 }
 
+export function useAnalyzeAll() {
+  return useMutation({
+    mutationFn: () =>
+      http<JobResponse>("/api/analyze-all", { method: "POST" }),
+  })
+}
+
+export function useCancelJob() {
+  return useMutation({
+    mutationFn: (jobId: string) =>
+      http<{ cancelled: string }>(`/api/jobs/${jobId}/cancel`, {
+        method: "POST",
+      }),
+  })
+}
+
 export function usePlaylistEntries() {
   return useMutation({
     mutationFn: (body: { url: string; max_tracks?: number | null }) =>

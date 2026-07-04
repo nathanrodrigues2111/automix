@@ -70,7 +70,7 @@ export function ModelStatusBanner({ progress }: ModelStatusBannerProps) {
             )} / ${formatBytes(status.data.total_bytes)})`
           : canDownload
             ? "Built-in analysis is active. Optional allin1/demucs weights (~2 GB) improve stem separation."
-            : "Built-in analysis is active. The optional neural stack (allin1/demucs, ~2-3 GB, GPU recommended) isn't installed — enable it with: pip install -e \"backend[ml]\""}
+            : "Built-in analysis is active. The optional neural stack (allin1/demucs, ~2-3 GB, GPU recommended) isn't installed. Enable it with: pip install -e \"backend[ml]\""}
       </span>
       {!downloading && canDownload && (
         <Button

@@ -76,6 +76,8 @@ export interface RenderConfig {
   brand_overlay?: boolean
   /** Per-track title overlay on the final render. */
   show_titles?: boolean
+  /** Black+silent tail reserved for YouTube end screens (seconds, 0 = off). */
+  outro_s?: number
   harmonic_pitch_shift_max_semitones: number
   proxy?: boolean
 }

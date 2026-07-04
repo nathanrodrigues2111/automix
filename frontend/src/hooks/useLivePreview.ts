@@ -34,12 +34,16 @@ interface Scheduled {
   t0: number
 }
 
+// v=n14: server-side loudness normalization — bump to invalidate cached
+// buffers when the clip audio processing changes.
+const CLIP_REV = "n14"
+
 function clipUrl(c: RenderClip): string {
-  return `/api/tracks/${c.track_id}/clip?start=${c.start_s.toFixed(3)}&end=${(c.end_s ?? c.start_s + 20).toFixed(3)}`
+  return `/api/tracks/${c.track_id}/clip?start=${c.start_s.toFixed(3)}&end=${(c.end_s ?? c.start_s + 20).toFixed(3)}&v=${CLIP_REV}`
 }
 
 function clipKey(c: RenderClip): string {
-  return `${c.track_id}:${c.start_s.toFixed(3)}:${(c.end_s ?? 0).toFixed(3)}`
+  return `${c.track_id}:${c.start_s.toFixed(3)}:${(c.end_s ?? 0).toFixed(3)}:${CLIP_REV}`
 }
 
 /** Crossfade into clip `c`: its pre-kick lead-in (2 bars), clamped sane. */
@@ -65,7 +69,7 @@ const FADE_OUT = new Float32Array(
 
 export type LivePreview = ReturnType<typeof useLivePreview>
 
-export function useLivePreview(clips: RenderClip[]) {
+export function useLivePreview(clips: RenderClip[], outroS = 0) {
   const focusId = useId()
   const ctxRef = useRef<AudioContext | null>(null)
   const buffersRef = useRef<Map<string, AudioBuffer>>(new Map())
@@ -124,6 +128,10 @@ export function useLivePreview(clips: RenderClip[]) {
       const sch = scheduledRef.current
       if (!ctx || !sch) return
       const pos = Math.max(0, ctx.currentTime - sch.t0)
+      if (pos >= sch.duration) {
+        stop()
+        return
+      }
       let active = 0
       for (let i = 0; i < sch.clipStarts.length; i++) {
         if (pos >= sch.clipStarts[i]) active = i
@@ -134,7 +142,7 @@ export function useLivePreview(clips: RenderClip[]) {
     }
     raf = requestAnimationFrame(tick)
     return () => cancelAnimationFrame(raf)
-  }, [state.status])
+  }, [state.status, stop])
 
   const play = useCallback(async () => {
     if (clips.length === 0) return
@@ -201,23 +209,22 @@ export function useLivePreview(clips: RenderClip[]) {
         cursor = startAt + buf.duration
       }
 
-      const sch: Scheduled = { sources, clipStarts, duration: cursor, t0 }
+      // The timeline includes the render's black outro tail (silence) so the
+      // preview's duration and end behavior match the final output.
+      const total = cursor + Math.max(0, outroS)
+      const sch: Scheduled = { sources, clipStarts, duration: total, t0 }
       scheduledRef.current = sch
-      const lastSrc = sources[sources.length - 1]
-      lastSrc.onended = () => {
-        if (scheduledRef.current === sch) stop()
-      }
       setState({
         status: "playing",
         position: 0,
-        duration: cursor,
+        duration: total,
         activeIndex: 0,
       })
     } catch (e) {
       setState((s) => ({ ...s, status: "idle" }))
       throw e
     }
-  }, [clips, focusId, stop])
+  }, [clips, focusId, stop, outroS])
 
   const toggle = useCallback(() => {
     if (statusRef.current === "playing") pause()

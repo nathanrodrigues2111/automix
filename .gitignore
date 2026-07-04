@@ -29,6 +29,8 @@ backend/automix.db-shm
 
 # Source MP4s and rendered output (large binaries — re-add with `git add -f` if needed)
 videos/
+# Raw intro overlay (2.7GB BGRA) — the web-sized transcode ships in frontend/public
+assets/*.avi
 
 # Environment / secrets
 .env

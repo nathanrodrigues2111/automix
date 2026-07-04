@@ -7,6 +7,7 @@ import {
   FolderOpen,
   Loader2,
   Play,
+  Square,
 } from "lucide-react"
 import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
@@ -20,7 +21,7 @@ import {
 } from "@/components/ui/dialog"
 import { Progress } from "@/components/ui/progress"
 import { Player } from "@/components/Player"
-import { useRender } from "@/api/client"
+import { useCancelJob, useRender } from "@/api/client"
 import type { RenderConfig } from "@/api/types"
 import type { ProgressMap } from "@/hooks/useProgressSocket"
 
@@ -41,6 +42,7 @@ export function RenderDialog({
 }: RenderDialogProps) {
   const isPreview = mode === "preview"
   const render = useRender()
+  const cancelJob = useCancelJob()
   const [jobId, setJobId] = useState<string | null>(null)
 
   // Reset job state when the dialog closes so reopening starts fresh.
@@ -86,9 +88,9 @@ export function RenderDialog({
           <DialogDescription>
             {jobId
               ? isPreview
-                ? "Rendering preview — typically ~30s. No stem separation, 720p."
-                : "Rendering — leave this dialog open."
-              : `${config.clips.length} clip(s), target ${config.target_bpm > 0 ? config.target_bpm.toFixed(1) + " BPM" : "auto BPM"}, ${config.crossfade_bars} bar crossfade, ${config.loudness_lufs.toFixed(1)} LUFS${isPreview ? " — 720p proxy" : ""}`}
+                ? "Rendering preview, typically around 30s. No stem separation, 720p."
+                : "Rendering. You can leave this dialog open."
+              : `${config.clips.length} clip(s), target ${config.target_bpm > 0 ? config.target_bpm.toFixed(1) + " BPM" : "auto BPM"}, ${config.crossfade_bars} bar crossfade, ${config.loudness_lufs.toFixed(1)} LUFS${isPreview ? " (720p proxy)" : ""}`}
           </DialogDescription>
         </DialogHeader>
 
@@ -109,7 +111,13 @@ export function RenderDialog({
           </div>
         )}
 
-        {done && !outputPath && (
+        {done && !outputPath && p?.message === "Cancelled" && (
+          <div className="rounded-lg border border-border/60 bg-muted/40 p-3 text-sm text-muted-foreground">
+            Render cancelled.
+          </div>
+        )}
+
+        {done && !outputPath && p?.message !== "Cancelled" && (
           <div className="rounded-lg border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">
             <div className="font-medium">Render failed</div>
             <div className="mt-1 truncate text-xs text-destructive/80">
@@ -158,8 +166,26 @@ export function RenderDialog({
         )}
 
         <DialogFooter>
+          {jobId && !done && (
+            <Button
+              variant="destructive"
+              disabled={cancelJob.isPending}
+              onClick={() => {
+                cancelJob.mutate(jobId, {
+                  onError: (e) => toast.error(`Cancel failed: ${e.message}`),
+                })
+              }}
+            >
+              {cancelJob.isPending ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Square className="h-4 w-4 fill-current" />
+              )}
+              Stop render
+            </Button>
+          )}
           <Button variant="outline" onClick={handleClose}>
-            {done ? "Close" : "Cancel"}
+            {done ? "Close" : "Close dialog"}
           </Button>
           {!jobId && (
             <Button onClick={start} disabled={render.isPending}>

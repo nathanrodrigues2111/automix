@@ -733,6 +733,24 @@ export function TrackList({
                     }
                     return (
                       <ul className="flex w-full min-w-0 flex-col gap-1.5">
+                        {drops.length > 1 && (
+                          <li>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="h-7 w-full justify-center gap-1.5 text-xs"
+                              onClick={() => {
+                                drops.forEach((d) => onAdd(t, d))
+                                toast.success(
+                                  `Added ${drops.length} drops to the mix`,
+                                  { description: displayTitle(t) },
+                                )
+                              }}
+                            >
+                              <Plus className="h-3 w-3" /> Add all {drops.length} drops
+                            </Button>
+                          </li>
+                        )}
                         {drops.map((d, i) => {
                           const dropKey = `${t.id}:${d.start_s.toFixed(2)}`
                           const isAdded = !!addedKeys?.has(dropKey)
@@ -834,6 +852,34 @@ export function TrackList({
             map each detected drop to its song; a list without timestamps
             labels the drops in order.
           </p>
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={setCues.isPending}
+            className="self-start text-xs"
+            onClick={() => {
+              if (!cuesTrack) return
+              setCues.mutate(
+                { trackId: cuesTrack.id, auto: true },
+                {
+                  onSuccess: (res) => {
+                    toast.success(
+                      `Fetched ${res.cues} cues from YouTube, ${res.labeled} drops labeled`,
+                    )
+                    setCuesTrack(null)
+                  },
+                  onError: (e) => toast.error(`Fetch failed: ${e.message}`),
+                },
+              )
+            }}
+          >
+            {setCues.isPending ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Globe className="h-3.5 w-3.5" />
+            )}
+            Fetch from YouTube (chapters/description)
+          </Button>
           <textarea
             value={cuesText}
             onChange={(e) => setCuesText(e.target.value)}

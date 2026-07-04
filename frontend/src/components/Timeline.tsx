@@ -12,6 +12,7 @@ import { Maximize2, Pause, Play, ZoomIn, ZoomOut } from "lucide-react"
 import type { MediaPlayerInstance } from "@vidstack/react"
 import type { Drop, Track } from "@/api/types"
 import { trackVideoUrl } from "@/api/client"
+import { apiUrl } from "@/lib/backend"
 import { useEffectiveTheme } from "@/lib/theme"
 import { cn } from "@/lib/utils"
 
@@ -161,6 +162,7 @@ export function Timeline({
       },
     })
 
+    let cancelled = false
     const ws = WaveSurfer.create({
       container: containerRef.current,
       waveColor: ["rgba(168, 85, 247, 0.75)", "rgba(217, 70, 239, 0.35)"],
@@ -176,9 +178,24 @@ export function Timeline({
       // autoScroll also fires on programmatic seeks (e.g. while dragging a
       // trim handle auditions the edit), which would yank the view around.
       autoScroll: false,
-      url: trackVideoUrl(track.id),
       plugins: [regions, timeline],
     })
+
+    // Server-side peaks instead of downloading + decoding the source media
+    // in the browser: a 4K hour-long set is 300MB+ and kills the tab. The
+    // waveform is visual-only anyway. Fall back to client decode if the
+    // peaks endpoint fails.
+    fetch(apiUrl(`/api/tracks/${track.id}/waveform`))
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
+      .then((peaks: { channels: number[][] }) => {
+        if (cancelled) return
+        const ch = peaks.channels?.[0]
+        if (!ch?.length) throw new Error("empty peaks")
+        void ws.load("", [ch], track.duration_s)
+      })
+      .catch(() => {
+        if (!cancelled) void ws.load(trackVideoUrl(track.id))
+      })
 
     wsRef.current = ws
     setPxPerSec(null)
@@ -228,6 +245,7 @@ export function Timeline({
     subs.push(ws.on("redrawcomplete", syncView))
 
     return () => {
+      cancelled = true
       subs.forEach((u) => u())
       ws.destroy()
       wsRef.current = null

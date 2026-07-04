@@ -114,6 +114,32 @@ def _flat_entries(url: str, max_tracks: int | None) -> list[dict[str, Any]]:
     return entries
 
 
+def fetch_cues_from_youtube(video_id: str) -> list[dict]:
+    """Pull a set's tracklist straight from YouTube: chapters when present
+    (exact timestamps), else timestamped lines parsed from the description."""
+    import yt_dlp
+    import analysis as analysis_mod
+
+    opts = {"quiet": True, "no_warnings": True, "skip_download": True}
+    with yt_dlp.YoutubeDL(opts) as ydl:
+        info = ydl.extract_info(
+            f"https://www.youtube.com/watch?v={video_id}", download=False
+        )
+    chapters = (info or {}).get("chapters") or []
+    cues = [
+        {"t_s": float(c["start_time"]), "title": str(c.get("title") or "").strip()}
+        for c in chapters
+        if c.get("start_time") is not None and c.get("title")
+    ]
+    if cues:
+        return cues
+    desc = str((info or {}).get("description") or "")
+    parsed = analysis_mod.parse_tracklist(desc)
+    # Description parsing only counts when it found real timestamps —
+    # otherwise every prose line would become a bogus "cue".
+    return [c for c in parsed if c.get("t_s") is not None]
+
+
 def _record_meta(
     path: Path, title: str, source_url: str, video_id: str, artist_hint: str = ""
 ) -> None:

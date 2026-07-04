@@ -135,10 +135,18 @@ export function useRenameTrack() {
 export function useSetCues() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: ({ trackId, text }: { trackId: string; text: string }) =>
+    mutationFn: ({
+      trackId,
+      text,
+      auto,
+    }: {
+      trackId: string
+      text?: string
+      auto?: boolean
+    }) =>
       http<{ cues: number; labeled: number }>(`/api/tracks/${trackId}/cues`, {
         method: "POST",
-        body: JSON.stringify({ text }),
+        body: JSON.stringify({ text: text ?? "", auto: auto ?? false }),
       }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["tracks"] })

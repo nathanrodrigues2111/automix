@@ -873,7 +873,8 @@ async def get_track_clip(track_id: str, start: float, end: float):
 
 
 class TracklistRequest(schemas.BaseModel):
-    text: str
+    text: str = ""
+    auto: bool = False  # fetch chapters/description from YouTube instead
 
 
 @app.post("/api/tracks/{track_id}/cues")
@@ -884,7 +885,16 @@ async def post_track_cues(track_id: str, req: TracklistRequest) -> dict:
     fh = analysis_mod.file_hash(path)
 
     def _run() -> dict:
-        cues = analysis_mod.parse_tracklist(req.text)
+        if req.auto:
+            meta = db.get_track_meta(fh) or {}
+            vid = meta.get("video_id")
+            if not vid:
+                raise ValueError("no YouTube video id recorded for this track")
+            cues = youtube_mod.fetch_cues_from_youtube(str(vid))
+            if not cues:
+                raise ValueError("no chapters or timestamped tracklist found on YouTube")
+        else:
+            cues = analysis_mod.parse_tracklist(req.text)
         if not cues:
             raise ValueError("no tracklist lines recognized")
         cached = db.get_analysis(fh)

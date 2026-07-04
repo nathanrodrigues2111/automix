@@ -82,6 +82,7 @@ class RenderRequest(BaseModel):
     brand_overlay: bool = True  # EDMPAPA letterbox bars + logo pass
     show_titles: bool = True  # per-clip track title in the bottom bar
     outro_s: float = 10.0  # black+silent tail for YouTube end screens (0 = off)
+    resolution: str = "1080p"  # 480p | 720p | 1080p | 1440p | 2160p
 
 
 class YouTubeImportRequest(BaseModel):

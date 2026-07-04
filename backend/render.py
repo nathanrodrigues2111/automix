@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import tempfile
@@ -93,36 +94,67 @@ def _pitch_shift_wav(in_wav: Path, out_wav: Path, semitones: float) -> None:
     sf.write(str(out_wav), out, sr)
 
 
-def _x264_encode_args(proxy: bool) -> list[str]:
+# Output canvas presets (16:9). Proxy renders force 720p regardless.
+_RESOLUTIONS: dict[str, tuple[int, int]] = {
+    "480p": (854, 480),
+    "720p": (1280, 720),
+    "1080p": (1920, 1080),
+    "1440p": (2560, 1440),
+    "2160p": (3840, 2160),
+}
+
+
+def _x264_encode_args(proxy: bool, intermediate: bool = False) -> list[str]:
     """Encoder settings only — for use after a -filter_complex chain or any
-    case where the video has already been normalized."""
+    case where the video has already been normalized. `intermediate` picks a
+    much faster preset for outputs that get re-encoded again downstream
+    (visually transparent at crf 16, big render-time win)."""
     if proxy:
         return ["-c:v", "libx264", "-crf", "28", "-preset", "ultrafast"]
+    if intermediate:
+        return ["-c:v", "libx264", "-crf", "16", "-preset", "veryfast"]
     return ["-c:v", "libx264", "-crf", "17", "-preset", "medium"]
 
 
-def _x264_args(proxy: bool) -> list[str]:
+def _x264_args(
+    proxy: bool,
+    canvas: tuple[int, int] | None = None,
+    intermediate: bool = False,
+) -> list[str]:
     """Full args: scale to a consistent resolution + encode. Used by trim/concat
     to ensure clips have IDENTICAL dimensions before downstream filters —
     xfade errors out on mismatched inputs, so crop-fill to a fixed canvas
     (plain scale=-2:H keeps the source aspect and widths then differ)."""
-    w, h = (1280, 720) if proxy else (_BRAND_W, _BRAND_H)
+    w, h = (1280, 720) if proxy else (canvas or (_BRAND_W, _BRAND_H))
     vf = f"scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h},setsar=1"
-    return ["-vf", vf, *_x264_encode_args(proxy)]
+    return ["-vf", vf, *_x264_encode_args(proxy, intermediate)]
 
 
-def _trim_video_clip(src: Path, start_s: float, duration_s: float, out: Path, proxy: bool = False) -> None:
+def _trim_video_clip(
+    src: Path,
+    start_s: float,
+    duration_s: float,
+    out: Path,
+    proxy: bool = False,
+    canvas: tuple[int, int] | None = None,
+    ratio: float = 1.0,
+) -> None:
+    """Trim + crop-fill + (optionally) time-stretch a clip's VIDEO in one
+    encode. Fusing the setpts stretch here saves a full second encode per
+    clip. Audio is handled separately, so none is kept. A constant fps keeps
+    all clips IDENTICAL for the concat/xfade stage."""
     out.parent.mkdir(parents=True, exist_ok=True)
-    a_bitrate = "192k" if proxy else "320k"
-    # Force a constant 30 fps + 44.1 kHz stereo so all clips have IDENTICAL
-    # framerate and audio params. Mixed framerates (25 vs 23.976) cause the
-    # concat demuxer to emit a video with bad timestamps, doubling duration.
+    w, h = (1280, 720) if proxy else (canvas or (_BRAND_W, _BRAND_H))
+    vf = f"scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h},setsar=1"
+    if abs(ratio - 1.0) > 0.005:
+        vf += f",setpts={ratio:.6f}*PTS"
+    vf += ",fps=30"
     cmd = [
         "ffmpeg", "-y", "-ss", f"{start_s:.3f}", "-i", str(src),
         "-t", f"{duration_s:.3f}",
-        "-r", "30",
-        *_x264_args(proxy),
-        "-c:a", "aac", "-b:a", a_bitrate, "-ar", "44100", "-ac", "2",
+        "-vf", vf,
+        "-an",
+        *_x264_encode_args(proxy, intermediate=True),
         "-pix_fmt", "yuv420p",
         "-movflags", "+faststart",
         str(out),
@@ -536,6 +568,8 @@ def _apply_branding(
     title_windows: list[tuple[str, float, float]],
     proxy: bool,
     brand_start: float = 0.0,
+    canvas: tuple[int, int] | None = None,
+    intermediate: bool = False,
 ) -> None:
     """EDMPAPA branding pass: crop-fill to 1920x1080, draw black letterbox
     bars OVER the video (top+bottom, 140px), overlay the logo in the top bar
@@ -548,6 +582,12 @@ def _apply_branding(
     if not have_font and title_windows:
         print(f"[render] branding: font missing at {FONT_PATH}, skipping titles")
 
+    bw, bh = canvas or (_BRAND_W, _BRAND_H)
+    k = bh / float(_BRAND_H)
+    bar_h = max(2, int(round(_BAR_H * k)))
+    logo_h = max(2, int(round(_LOGO_H * k)))
+    logo_margin = max(2, int(round(_LOGO_MARGIN_RIGHT * k)))
+
     filters: list[str] = []
     label = "base"
     # brand_start > 0: during the intro animation the full branding (with
@@ -556,15 +596,16 @@ def _apply_branding(
     en = f":enable='gte(t,{brand_start:.3f})'" if brand_start > 0 else ""
     have_bars = brand_start > 0 and BARS_PATH.exists()
     filters.append(
-        f"[0:v]scale={_BRAND_W}:{_BRAND_H}:force_original_aspect_ratio=increase,"
-        f"crop={_BRAND_W}:{_BRAND_H},setsar=1,"
-        f"drawbox=x=0:y=0:w=iw:h={_BAR_H}:color=black:t=fill,"
-        f"drawbox=x=0:y=ih-{_BAR_H}:w=iw:h={_BAR_H}:color=black:t=fill[{label}]"
+        f"[0:v]scale={bw}:{bh}:force_original_aspect_ratio=increase,"
+        f"crop={bw}:{bh},setsar=1,"
+        f"drawbox=x=0:y=0:w=iw:h={bar_h}:color=black:t=fill,"
+        f"drawbox=x=0:y=ih-{bar_h}:w=iw:h={bar_h}:color=black:t=fill[{label}]"
     )
     if have_bars:
         bars_idx = 2 if have_logo else 1
         filters.append(
-            f"[{label}][{bars_idx}:v]overlay=x=0:y=0:"
+            f"[{bars_idx}:v]scale={bw}:{bh}[barsimg];"
+            f"[{label}][barsimg]overlay=x=0:y=0:"
             f"enable='lt(t,{brand_start:.3f})'[barsed]"
         )
         label = "barsed"
@@ -577,12 +618,15 @@ def _apply_branding(
             # edmpapa11.png is a ready-made full-frame overlay (opaque bars
             # top/bottom with the wordmark baked in, transparent middle) —
             # composite it 1:1 instead of shrinking the whole frame to 84px.
-            filters.append(f"[{label}][1:v]overlay=x=0:y=0{en}[branded]")
-        else:
-            filters.append(f"[1:v]scale=-1:{_LOGO_H}[logo]")
             filters.append(
-                f"[{label}][logo]overlay=x=W-w-{_LOGO_MARGIN_RIGHT}:"
-                f"y=({_BAR_H}-{_LOGO_H})/2{en}[branded]"
+                f"[1:v]scale={bw}:{bh}[brandimg];"
+                f"[{label}][brandimg]overlay=x=0:y=0{en}[branded]"
+            )
+        else:
+            filters.append(f"[1:v]scale=-1:{logo_h}[logo]")
+            filters.append(
+                f"[{label}][logo]overlay=x=W-w-{logo_margin}:"
+                f"y=({bar_h}-{logo_h})/2{en}[branded]"
             )
         label = "branded"
     try:
@@ -609,7 +653,7 @@ def _apply_branding(
         cmd += [
             "-filter_complex", ";".join(filters),
             "-map", f"[{label}]", "-map", "0:a?",
-            *_x264_encode_args(proxy),
+            *_x264_encode_args(proxy, intermediate),
             "-pix_fmt", "yuv420p",
             "-movflags", "+faststart",
             *audio_args,
@@ -624,6 +668,7 @@ def _xfade_videos(
     out_path: Path,
     proxy: bool = False,
     durations: list[float] | None = None,
+    intermediate: bool = False,
 ) -> None:
     """Concat parts with per-boundary video crossfades. crossfades_s has one
     fewer element than parts (one per transition).
@@ -682,7 +727,7 @@ def _xfade_videos(
         "-filter_complex", ";".join(filter_parts),
         "-map", "[vout]",
         "-an",
-        *_x264_encode_args(proxy),
+        *_x264_encode_args(proxy, intermediate),
         "-pix_fmt", "yuv420p",
         "-movflags", "+faststart",
         str(out_path),
@@ -882,6 +927,8 @@ def render_mix(
 
     # Intro overlay (screen-blended over the first clip's buildup, timed to
     # end exactly on the first drop's kick). Default: assets/into.avi.
+    canvas = _RESOLUTIONS.get(str(config.get("resolution", "1080p")), (_BRAND_W, _BRAND_H))
+
     intro_cfg = config.get("intro_path")
     intro_path = Path(intro_cfg) if intro_cfg else (ASSETS_DIR / "into.avi")
     intro_dur = 0.0
@@ -895,17 +942,19 @@ def render_mix(
     if progress:
         progress("render", 1.0, f"Preparing clips (target {target_bpm:.1f} BPM)")
 
-    clip_videos: list[Path] = []
-    clip_audios: list[Path] = []
-    clip_stems: list[dict[str, Path] | None] = []
-    clip_ratios: list[float] = []
+    n_clips = len(clips)
+    clip_videos: list[Path | None] = [None] * n_clips
+    clip_audios: list[Path | None] = [None] * n_clips
+    clip_stems: list[dict[str, Path] | None] = [None] * n_clips
+    clip_ratios: list[float] = [1.0] * n_clips
+    _fk = {"out": 0.0}
 
     def _check_cancel() -> None:
         if cancel and cancel():
             raise RuntimeError("cancelled")
 
-    n_clips = len(clips)
-    for idx, clip in enumerate(clips):
+    def _prepare_clip(idx: int) -> None:
+        clip = clips[idx]
         _check_cancel()
         src = srcs[idx]
         cached = analyses[idx]
@@ -955,7 +1004,7 @@ def render_mix(
             raw_start = max(0.0, float(kick) - breath)
             clip["start_s"] = raw_start  # _crossfade_for reads this
         if idx == 0:
-            first_kick_out = (
+            _fk["out"] = (
                 (float(kick) - raw_start) * pre_ratio if kick is not None else 0.0
             )
         explicit_end = clip.get("end_s")
@@ -975,28 +1024,17 @@ def render_mix(
                 if snapped_end > start_s:
                     clip_len_s = snapped_end - start_s
         out_ratio = pre_ratio
-        clip_ratios.append(out_ratio)
+        clip_ratios[idx] = out_ratio
 
         clip_dir = work / f"clip_{idx:02d}"
         clip_dir.mkdir(parents=True, exist_ok=True)
 
-        # Video: trim then time-stretch via setpts.
-        raw_video = clip_dir / "video_raw.mp4"
-        _trim_video_clip(src, start_s, clip_len_s, raw_video, proxy=proxy)
-
+        # Video: trim + crop + stretch in ONE encode.
         stretched_video = clip_dir / "video.mp4"
-        if abs(out_ratio - 1.0) > 0.005:
-            cmd = [
-                "ffmpeg", "-y", "-i", str(raw_video),
-                "-filter:v", f"setpts={out_ratio}*PTS",
-                "-an",
-                *_x264_args(proxy),
-                "-pix_fmt", "yuv420p",
-                str(stretched_video),
-            ]
-            subprocess.run(cmd, check=True, capture_output=True)
-        else:
-            shutil.copy(raw_video, stretched_video)
+        _trim_video_clip(
+            src, start_s, clip_len_s, stretched_video,
+            proxy=proxy, canvas=canvas, ratio=out_ratio,
+        )
 
         # Audio path: extract → time-stretch → pitch-shift → loudnorm.
         raw_audio = clip_dir / "audio_raw.wav"
@@ -1029,13 +1067,26 @@ def render_mix(
                     _pitch_shift_wav(p, shifted, pitch_shifts[idx])
                     stems[name] = shifted
 
-        clip_videos.append(stretched_video)
-        clip_audios.append(normed_audio)
-        clip_stems.append(stems)
+        clip_videos[idx] = stretched_video
+        clip_audios[idx] = normed_audio
+        clip_stems[idx] = stems
 
-        if progress:
-            pct = 5.0 + (idx + 1) / max(n_clips, 1) * 60.0
-            progress("render", pct, f"Prepared clip {idx + 1}/{n_clips}")
+    # Clips are independent — prepare them in parallel. ffmpeg already
+    # multithreads its encodes, so a handful of workers saturates the CPU
+    # without oversubscribing it.
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    workers = max(1, min(4, (os.cpu_count() or 4) // 2, n_clips))
+    done_n = 0
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futs = [pool.submit(_prepare_clip, i) for i in range(n_clips)]
+        for fut in as_completed(futs):
+            fut.result()  # propagate errors/cancellation
+            done_n += 1
+            if progress:
+                pct = 5.0 + done_n / max(n_clips, 1) * 60.0
+                progress("render", pct, f"Prepared clip {done_n}/{n_clips}")
+
+    first_kick_out = _fk["out"]
 
     # Build final audio with crossfades between consecutive clips.
     if progress:
@@ -1200,6 +1251,7 @@ def render_mix(
         _xfade_videos(
             clip_videos, crossfade_durations, concat_video,
             proxy=proxy, durations=audio_lens,
+            intermediate=bool(brand_overlay),
         )
 
     # Gentle tail fade so the mix doesn't stop on a hard cut before the outro.
@@ -1250,6 +1302,8 @@ def render_mix(
         _apply_branding(
             muxed, out_path, windows, proxy,
             brand_start=first_kick_out if intro_dur > 0 else 0.0,
+            canvas=canvas,
+            intermediate=intro_dur > 0 and first_kick_out > 0,
         )
     else:
         _mux_video_audio(concat_video, final_audio, out_path)

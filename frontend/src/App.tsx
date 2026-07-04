@@ -100,6 +100,7 @@ const DEFAULT_CONFIG: Omit<RenderConfig, "clips"> = {
   brand_overlay: true, // EDMPAPA black bars + logo
   show_titles: true, // per-track title overlay
   outro_s: 10, // black outro reserved for YouTube end screens
+  resolution: "1080p", // final render canvas
   harmonic_pitch_shift_max_semitones: 0, // don't pitch-shift either
 }
 

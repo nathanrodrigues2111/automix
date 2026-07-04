@@ -317,6 +317,27 @@ export function SettingsDialog({
 
           <section className="space-y-3">
             <SectionLabel>Output</SectionLabel>
+            <div className="space-y-2">
+              <Label className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+                Resolution
+              </Label>
+              <Select
+                value={config.resolution ?? "1080p"}
+                onValueChange={(v) => setConfig({ ...config, resolution: v })}
+              >
+                <SelectTrigger className="h-8 bg-background/60 text-xs">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="480p">480p</SelectItem>
+                  <SelectItem value="720p">720p (HD)</SelectItem>
+                  <SelectItem value="1080p">1080p (Full HD)</SelectItem>
+                  <SelectItem value="1440p">1440p (2K)</SelectItem>
+                  <SelectItem value="2160p">2160p (4K)</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
             <SwitchRow
               title="EDMPAPA branding"
               description="Letterbox bars + logo overlay on the final video"

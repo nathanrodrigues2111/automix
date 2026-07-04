@@ -4,6 +4,7 @@ import asyncio
 import json
 import re
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -368,7 +369,10 @@ async def post_youtube_import(req: schemas.YouTubeImportRequest) -> dict:
 # ---------- Automix: import → analyze → pick drops → render ----------
 
 AUTOMIX_DEFAULT_CONFIG: dict[str, Any] = {
-    "no_time_stretch": True,
+    # Beat-match: stretch clips (ffmpeg atempo, pitch-preserving) to a common
+    # BPM so the whole mix rides one steady grid — the reference EDMPAPA mixes
+    # hold ~129 BPM throughout. Clips >8% off stay native (render.py clamps).
+    "no_time_stretch": False,
     "snap_to_downbeat": True,
     # Short, beat-snapped blend. Long crossfades overlap two off-tempo beat
     # grids (clips play at native BPM) and audibly clash; ~1 beat-bar of
@@ -437,13 +441,13 @@ def _automix_pipeline(req: schemas.AutomixRequest, progress) -> dict:
 
     # 4. Build clips: best-scoring drop per track, ordered by BPM ascending.
     clips: list[dict] = []
-    # Transition style measured from the reference EDMPAPA mix (014oXybzUkc):
-    # each track plays at full energy until ~1-1.5s before the NEXT kick, then
-    # a sub-second "breath" (riser tail), then the drop slams in. Long buildups
-    # between drops don't exist there — so after ordering, trim every clip
-    # except the first down to a short pre-kick breath. The first clip keeps
-    # its full detected buildup as the mix intro.
-    BREATH_S = 1.25
+    # Transition style measured from the reference EDMPAPA mixes: each track
+    # plays at full energy until just before the NEXT kick, then a short
+    # "breath" (riser tail), then the drop slams in. The breath is exactly
+    # 2 beats at the clip's own BPM: after time-stretching to the target BPM
+    # it equals the 0.5-bar crossfade, so the incoming kick lands precisely on
+    # the downbeat where the outgoing clip ends — beat-matched transitions.
+    # The first clip keeps its full detected buildup as the mix intro.
 
     for fh, a in entries:
         drops = a.get("drops") or []
@@ -468,9 +472,10 @@ def _automix_pipeline(req: schemas.AutomixRequest, progress) -> dict:
         raise RuntimeError("no usable drops found in any track")
     clips.sort(key=lambda c: c["_bpm"])
     for i, c in enumerate(clips):
-        c.pop("_bpm")
+        bpm = c.pop("_bpm")
         if i > 0 and c["kick_s"] is not None:
-            c["start_s"] = max(c["start_s"], c["kick_s"] - BREATH_S)
+            breath = 2.0 * 60.0 / bpm if bpm > 0 else 1.0
+            c["start_s"] = max(c["start_s"], c["kick_s"] - breath)
 
     # 5. Render, mapped to 70-100%.
     config = {**AUTOMIX_DEFAULT_CONFIG, **(req.config or {}), "clips": clips}
@@ -537,6 +542,95 @@ async def get_project(project_id: str) -> dict:
     if not p:
         raise HTTPException(status_code=404, detail="project not found")
     return p
+
+
+@app.get("/api/mixes")
+async def list_mixes() -> list[dict]:
+    """All rendered automix videos, newest first."""
+
+    def _run() -> list[dict]:
+        out = []
+        for p in sorted(VIDEOS_DIR.glob("automix_*.mp4"), key=lambda x: x.stat().st_mtime, reverse=True):
+            st = p.stat()
+            out.append(
+                {
+                    "filename": p.name,
+                    "path": f"videos/{p.name}",
+                    "size_bytes": st.st_size,
+                    "created_at": datetime.fromtimestamp(st.st_mtime, tz=timezone.utc).isoformat(),
+                }
+            )
+        return out
+
+    return await asyncio.to_thread(_run)
+
+
+def _safe_video_file(filename: str, prefix: str | None = None) -> Path:
+    name = Path(filename).name  # strip any path components
+    if name != filename or "/" in filename or ".." in filename:
+        raise HTTPException(status_code=400, detail="invalid filename")
+    if prefix and not name.startswith(prefix):
+        raise HTTPException(status_code=400, detail="not a rendered mix")
+    p = VIDEOS_DIR / name
+    if not p.exists():
+        raise HTTPException(status_code=404, detail="file not found")
+    return p
+
+
+@app.delete("/api/mixes/{filename}")
+async def delete_mix(filename: str) -> dict:
+    p = _safe_video_file(filename, prefix="automix_")
+    await asyncio.to_thread(p.unlink)
+    return {"deleted": filename}
+
+
+@app.delete("/api/tracks/{track_id}")
+async def delete_track(track_id: str) -> dict:
+    path = _resolve_track_path(track_id)
+    if path.name.startswith("automix_"):
+        raise HTTPException(status_code=400, detail="use /api/mixes to delete renders")
+    await asyncio.to_thread(path.unlink)
+    _TRACK_PATH_CACHE.pop(track_id, None)
+    return {"deleted": path.name}
+
+
+@app.post("/api/tracks/refresh-titles")
+async def refresh_titles() -> dict:
+    """Re-resolve canonical titles for every library track via Deezer/iTunes.
+    Tracks without a confident catalog match keep their cleaned filename title."""
+
+    def _run() -> dict:
+        updated: list[dict] = []
+        for path in sorted(VIDEOS_DIR.rglob("*.mp4")):
+            if path.name.startswith("automix_"):
+                continue
+            fh = analysis_mod.file_hash(path)
+            meta = db.get_track_meta(fh)
+            current = meta["title"] if meta and meta.get("title") else youtube_mod.clean_title(path.stem)
+            # Title-only filenames need an artist hint; get the uploader from
+            # YouTube when we know the source video.
+            hint = ""
+            vid = (meta or {}).get("video_id", "")
+            if vid and " - " not in youtube_mod.clean_title(path.stem):
+                try:
+                    import yt_dlp
+                    with yt_dlp.YoutubeDL({"quiet": True, "no_warnings": True, "skip_download": True}) as ydl:
+                        info = ydl.extract_info(f"https://www.youtube.com/watch?v={vid}", download=False, process=False)
+                    hint = str((info or {}).get("uploader") or (info or {}).get("channel") or "")
+                except Exception:
+                    hint = ""
+            resolved = youtube_mod.resolve_full_title(path.stem, artist_hint=hint)
+            if resolved and resolved != current:
+                db.put_track_meta(
+                    fh,
+                    title=resolved,
+                    source_url=(meta or {}).get("source_url", ""),
+                    video_id=(meta or {}).get("video_id", ""),
+                )
+                updated.append({"from": current, "to": resolved})
+        return {"updated": len(updated), "changes": updated}
+
+    return await asyncio.to_thread(_run)
 
 
 @app.get("/api/models/status")

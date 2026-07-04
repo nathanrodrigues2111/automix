@@ -108,10 +108,20 @@ def _flat_entries(url: str, max_tracks: int | None) -> list[dict[str, Any]]:
     return entries
 
 
-def _record_meta(path: Path, title: str, source_url: str, video_id: str) -> None:
+def _record_meta(
+    path: Path, title: str, source_url: str, video_id: str, artist_hint: str = ""
+) -> None:
     fh = analysis_mod.file_hash(path)
+    # Prefer the canonical catalog title (Deezer/iTunes lookup) — YouTube
+    # titles are often truncated or missing the artist; the uploader/channel
+    # name disambiguates title-only queries. Falls back to the cleaned
+    # YouTube title when no confident match exists or we're offline.
+    resolved = resolve_full_title(title, artist_hint=artist_hint)
     db.put_track_meta(
-        fh, title=clean_title(title), source_url=source_url, video_id=video_id
+        fh,
+        title=resolved or clean_title(title),
+        source_url=source_url,
+        video_id=video_id,
     )
 
 
@@ -143,9 +153,10 @@ def import_playlist(
         display = clean_title(raw_title)
         watch_url = entry.get("url") or f"https://www.youtube.com/watch?v={video_id}"
 
+        hint = str(entry.get("uploader") or entry.get("channel") or "")
         existing = _find_existing(dest_dir, video_id)
         if existing is not None:
-            _record_meta(existing, raw_title, watch_url, video_id)
+            _record_meta(existing, raw_title, watch_url, video_id, hint)
             results.append(
                 {"path": str(existing), "title": clean_title(raw_title), "video_id": video_id}
             )
@@ -205,7 +216,7 @@ def import_playlist(
             continue
 
         final_title = str(info.get("title") or raw_title)
-        _record_meta(path, final_title, watch_url, video_id)
+        _record_meta(path, final_title, watch_url, video_id, hint)
         results.append(
             {"path": str(path), "title": clean_title(final_title), "video_id": video_id}
         )
@@ -221,3 +232,112 @@ def import_playlist(
             msg += f" ({failed} skipped)"
         progress("download", 99.5, msg)
     return results
+
+
+# ---------- Canonical title resolution (Deezer / iTunes lookup) ----------
+
+def _norm_for_match(s: str) -> str:
+    s = s.lower()
+    s = re.sub(r"[\(\)\[\]&,+]", " ", s)
+    s = re.sub(r"\b(feat\.?|ft\.?|featuring|the|a|x)\b", " ", s)
+    s = re.sub(r"[^a-z0-9\s]", "", s)
+    return re.sub(r"\s+", " ", s).strip()
+
+
+def _title_match_score(query: str, candidate: str) -> float:
+    """Similarity in [0,1] between a query title and a catalog candidate.
+    Combines difflib ratio with token overlap so word order doesn't matter."""
+    from difflib import SequenceMatcher
+
+    q, c = _norm_for_match(query), _norm_for_match(candidate)
+    if not q or not c:
+        return 0.0
+    ratio = SequenceMatcher(None, q, c).ratio()
+    qt, ct = set(q.split()), set(c.split())
+    overlap = len(qt & ct) / max(1, len(qt | ct))
+    return 0.5 * ratio + 0.5 * overlap
+
+
+def _http_json(url: str, timeout: float = 6.0) -> Any:
+    import json as _json
+    import urllib.request
+
+    req = urllib.request.Request(url, headers={"User-Agent": "automix/1.0"})
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return _json.loads(resp.read().decode("utf-8"))
+
+
+def _search_deezer(query: str) -> list[tuple[str, str]]:
+    import urllib.parse
+
+    url = f"https://api.deezer.com/search?q={urllib.parse.quote(query)}&limit=5"
+    data = _http_json(url)
+    out = []
+    for item in (data.get("data") or [])[:5]:
+        artist = (item.get("artist") or {}).get("name", "")
+        title = item.get("title", "")
+        if artist and title:
+            out.append((artist, title))
+    return out
+
+
+def _search_itunes(query: str) -> list[tuple[str, str]]:
+    import urllib.parse
+
+    url = (
+        "https://itunes.apple.com/search?media=music&entity=song&limit=5"
+        f"&term={urllib.parse.quote(query)}"
+    )
+    data = _http_json(url)
+    out = []
+    for item in (data.get("results") or [])[:5]:
+        artist = item.get("artistName", "")
+        title = item.get("trackName", "")
+        if artist and title:
+            out.append((artist, title))
+    return out
+
+
+def _clean_artist_hint(uploader: str) -> str:
+    """YouTube channel name -> artist hint ("Martin Garrix - Topic" -> "Martin Garrix")."""
+    s = re.sub(r"\s*-\s*topic\s*$", "", uploader or "", flags=re.IGNORECASE)
+    s = re.sub(r"vevo\s*$", "", s, flags=re.IGNORECASE)
+    return s.strip()
+
+
+def resolve_full_title(
+    raw_title: str, artist_hint: str = "", min_score: float = 0.62
+) -> str | None:
+    """Look up the canonical "Artist - Title" in Deezer/iTunes.
+
+    `artist_hint` (usually the YouTube uploader/channel) disambiguates
+    title-only queries — "Pressure" alone matches many songs, but the hint
+    picks the right artist. Returns None when no candidate matches
+    confidently, so a bad lookup can never replace a good title with the
+    wrong song."""
+    query = clean_title(raw_title)
+    if not query:
+        return None
+    hint = _clean_artist_hint(artist_hint)
+    # When the title carries no artist ("Song" instead of "Artist - Song"),
+    # fold the hint into both the search and the match reference.
+    has_artist = " - " in query
+    search_q = query if has_artist else f"{hint} {query}".strip()
+    match_ref = query if has_artist else (f"{hint} - {query}" if hint else query)
+
+    best: tuple[float, int, str] | None = None
+    for engine_rank, search in enumerate((_search_deezer, _search_itunes)):
+        try:
+            for rank, (artist, title) in enumerate(search(search_q)):
+                candidate = f"{artist} - {title}"
+                score = _title_match_score(match_ref, candidate)
+                if score < min_score:
+                    continue
+                # Prefer catalog relevance rank over tiny score differences:
+                # score buckets of 0.1, then engine order, then result order.
+                key = (round(score, 1), -engine_rank, -rank)
+                if best is None or key > (best[0], -best[1], -best[2]):
+                    best = (round(score, 1), engine_rank * 10 + rank, candidate)
+        except Exception:
+            continue  # offline / API down -> just use the cleaned title
+    return best[2] if best else None

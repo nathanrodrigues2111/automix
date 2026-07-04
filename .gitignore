@@ -28,8 +28,7 @@ backend/automix.db-wal
 backend/automix.db-shm
 
 # Source MP4s and rendered output (large binaries — re-add with `git add -f` if needed)
-videos/*.mp4
-videos/automix_*.mp4
+videos/
 
 # Environment / secrets
 .env

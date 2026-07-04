@@ -7,6 +7,7 @@ import {
   Monitor,
   Moon,
   MousePointerClick,
+  RefreshCw,
   Repeat,
   Settings2,
   Sliders,
@@ -18,6 +19,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Separator } from "@/components/ui/separator"
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet"
 import { AutomixPanel } from "@/components/AutomixPanel"
+import { MixesPanel } from "@/components/MixesPanel"
 import { TrackList } from "@/components/TrackList"
 import { Timeline } from "@/components/Timeline"
 import { VideoPreview } from "@/components/VideoPreview"
@@ -26,7 +28,7 @@ import { ModelStatusBanner } from "@/components/ModelDownloadDialog"
 import { ProjectManager } from "@/components/ProjectManager"
 import { RenderDialog } from "@/components/RenderDialog"
 import { SettingsDialog } from "@/components/SettingsDialog"
-import { useTracks } from "@/api/client"
+import { useRefreshTitles, useTracks } from "@/api/client"
 import type { Drop, Project, RenderConfig, Track } from "@/api/types"
 import { useProgressSocket } from "@/hooks/useProgressSocket"
 import { displayTitle, formatDuration } from "@/lib/format"
@@ -85,6 +87,35 @@ function ThemeToggle() {
       className="h-8 w-8 text-muted-foreground hover:text-foreground"
     >
       <Icon className="h-4 w-4" />
+    </Button>
+  )
+}
+
+function RefreshTitlesButton() {
+  const refresh = useRefreshTitles()
+  return (
+    <Button
+      variant="ghost"
+      size="icon"
+      aria-label="Refresh track titles"
+      title="Re-fetch clean titles for all tracks"
+      disabled={refresh.isPending}
+      onClick={() =>
+        refresh.mutate(undefined, {
+          onSuccess: (res) =>
+            toast.success(
+              res.updated > 0
+                ? `Updated ${res.updated} title${res.updated === 1 ? "" : "s"}`
+                : "Titles already up to date",
+            ),
+          onError: (e) => toast.error(`Refresh failed: ${e.message}`),
+        })
+      }
+      className="h-6 w-6 text-muted-foreground hover:text-foreground"
+    >
+      <RefreshCw
+        className={cn("h-3.5 w-3.5", refresh.isPending && "animate-spin")}
+      />
     </Button>
   )
 }

@@ -6,10 +6,13 @@ import {
 import type {
   AnalyzeRequest,
   AutomixRequest,
+  DeleteResponse,
   JobResponse,
+  MixRecord,
   ModelsStatus,
   Project,
   ProjectCreate,
+  RefreshTitlesResponse,
   RenderConfig,
   RenderRecord,
   RenderResponse,
@@ -78,6 +81,51 @@ export function useRender() {
         method: "POST",
         body: JSON.stringify(body),
       }),
+  })
+}
+
+export function useMixes() {
+  return useQuery({
+    queryKey: ["mixes"],
+    queryFn: () => http<MixRecord[]>("/api/mixes"),
+    refetchOnWindowFocus: false,
+  })
+}
+
+export function useDeleteMix() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (filename: string) =>
+      http<DeleteResponse>(`/api/mixes/${encodeURIComponent(filename)}`, {
+        method: "DELETE",
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["mixes"] })
+    },
+  })
+}
+
+export function useDeleteTrack() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (trackId: string) =>
+      http<DeleteResponse>(`/api/tracks/${trackId}`, { method: "DELETE" }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["tracks"] })
+    },
+  })
+}
+
+export function useRefreshTitles() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: () =>
+      http<RefreshTitlesResponse>("/api/tracks/refresh-titles", {
+        method: "POST",
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["tracks"] })
+    },
   })
 }
 

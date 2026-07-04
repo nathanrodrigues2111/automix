@@ -1,10 +1,21 @@
-import { useEffect, useState } from "react"
-import { Check, Loader2, Music, Pause, Play, Plus, Sparkles, Zap } from "lucide-react"
+import { useEffect, useRef, useState } from "react"
+import {
+  Check,
+  Loader2,
+  Music,
+  Pause,
+  Play,
+  Plus,
+  Sparkles,
+  Trash2,
+  Zap,
+} from "lucide-react"
 import { toast } from "sonner"
+import { useQueryClient } from "@tanstack/react-query"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Progress } from "@/components/ui/progress"
-import { useAnalyze, useTracks } from "@/api/client"
+import { useAnalyze, useDeleteTrack, useTracks } from "@/api/client"
 import type { Drop, Track } from "@/api/types"
 import type { ProgressMap } from "@/hooks/useProgressSocket"
 import { displayTitle, formatDuration } from "@/lib/format"
@@ -37,9 +48,88 @@ export function TrackList({
   addedKeys,
   referenceBpm,
 }: TrackListProps) {
+  const qc = useQueryClient()
   const tracks = useTracks()
   const analyze = useAnalyze()
+  const deleteTrack = useDeleteTrack()
   const [jobByTrack, setJobByTrack] = useState<Record<string, string>>({})
+
+  // Single-row delete: first click arms the confirm, second click deletes.
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null)
+  const confirmTimerRef = useRef<number | null>(null)
+
+  // Batch selection mode.
+  const [selectMode, setSelectMode] = useState(false)
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+  const [confirmBatch, setConfirmBatch] = useState(false)
+  const batchTimerRef = useRef<number | null>(null)
+  const [batchBusy, setBatchBusy] = useState(false)
+
+  const handleDeleteClick = (t: Track) => {
+    if (confirmDeleteId !== t.id) {
+      setConfirmDeleteId(t.id)
+      if (confirmTimerRef.current) window.clearTimeout(confirmTimerRef.current)
+      confirmTimerRef.current = window.setTimeout(
+        () => setConfirmDeleteId(null),
+        3000,
+      )
+      return
+    }
+    if (confirmTimerRef.current) window.clearTimeout(confirmTimerRef.current)
+    setConfirmDeleteId(null)
+    deleteTrack.mutate(t.id, {
+      onSuccess: () => toast.success("Track deleted", { description: displayTitle(t) }),
+      onError: (e) => toast.error(`Delete failed: ${e.message}`),
+    })
+  }
+
+  const toggleSelectMode = () => {
+    setSelectMode((s) => !s)
+    setSelectedIds(new Set())
+    setConfirmBatch(false)
+  }
+
+  const toggleSelected = (id: string) => {
+    setConfirmBatch(false)
+    setSelectedIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
+  const handleBatchDelete = async () => {
+    if (!confirmBatch) {
+      setConfirmBatch(true)
+      if (batchTimerRef.current) window.clearTimeout(batchTimerRef.current)
+      batchTimerRef.current = window.setTimeout(
+        () => setConfirmBatch(false),
+        4000,
+      )
+      return
+    }
+    if (batchTimerRef.current) window.clearTimeout(batchTimerRef.current)
+    setConfirmBatch(false)
+    setBatchBusy(true)
+    const ids = [...selectedIds]
+    const results = await Promise.allSettled(
+      ids.map((id) => deleteTrack.mutateAsync(id)),
+    )
+    setBatchBusy(false)
+    const ok = results.filter((r) => r.status === "fulfilled").length
+    const failed = results.length - ok
+    if (failed === 0) {
+      toast.success(`Deleted ${ok} track${ok === 1 ? "" : "s"}`)
+    } else {
+      toast.error(`Deleted ${ok}, failed ${failed}`, {
+        description: "Some tracks could not be removed — list refreshed.",
+      })
+    }
+    setSelectedIds(new Set())
+    setSelectMode(false)
+    qc.invalidateQueries({ queryKey: ["tracks"] })
+  }
 
   useEffect(() => {
     Object.entries(jobByTrack).forEach(([trackId, jobId]) => {
@@ -96,40 +186,137 @@ export function TrackList({
     )
   }
 
+  const allSelected = items.length > 0 && selectedIds.size === items.length
+
   return (
-    <div className="h-full min-w-0 overflow-y-auto overflow-x-hidden">
+    <div className="flex h-full min-w-0 flex-col overflow-hidden">
+      <div className="flex min-h-9 flex-wrap items-center justify-between gap-2 border-b border-border/40 px-2 py-1">
+        <div className="flex items-center gap-2">
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={toggleSelectMode}
+            className="h-6 px-2 text-xs"
+          >
+            {selectMode ? "Done" : "Select"}
+          </Button>
+          {selectMode && (
+            <label className="flex cursor-pointer items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground">
+              <input
+                type="checkbox"
+                className="h-3.5 w-3.5 accent-[var(--primary)]"
+                checked={allSelected}
+                onChange={() =>
+                  setSelectedIds(
+                    allSelected
+                      ? new Set()
+                      : new Set(items.map((t) => t.id)),
+                  )
+                }
+              />
+              Select all
+            </label>
+          )}
+        </div>
+        {selectMode && selectedIds.size > 0 && (
+          <Button
+            variant="destructive"
+            size="sm"
+            disabled={batchBusy}
+            onClick={handleBatchDelete}
+            className="h-6 px-2 text-xs"
+          >
+            {batchBusy ? (
+              <Loader2 className="h-3 w-3 animate-spin" />
+            ) : (
+              <Trash2 className="h-3 w-3" />
+            )}
+            {confirmBatch
+              ? `Really delete ${selectedIds.size}?`
+              : `Delete selected (${selectedIds.size})`}
+          </Button>
+        )}
+      </div>
+
+      <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden">
       <ul className="min-w-0 divide-y divide-border/40">
         {items.map((t) => {
           const jobId = jobByTrack[t.id]
           const p = jobId ? progress[jobId] : undefined
           const isAnalyzing = !!jobId && (!p || !p.done)
+          const isConfirmingDelete = confirmDeleteId === t.id
+          const isChecked = selectedIds.has(t.id)
           return (
             <li
               key={t.id}
               className={cn(
                 "group relative flex flex-col gap-2 border-l-2 border-transparent px-3.5 py-2.5 transition-colors hover:bg-accent/20",
-                selectedId === t.id && "border-l-primary bg-primary/10",
+                !selectMode &&
+                  selectedId === t.id &&
+                  "border-l-primary bg-primary/10",
+                selectMode && isChecked && "border-l-primary bg-primary/10",
               )}
             >
-              <button
-                onClick={() => onSelect(t)}
-                className="flex min-w-0 items-start gap-2 rounded-md text-left focus-visible:outline-2 focus-visible:outline-ring"
-              >
-                <Music className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                <div className="flex min-w-0 flex-1 flex-col">
-                  <div
-                    className="line-clamp-2 break-words text-sm font-medium leading-snug"
-                    title={t.filename}
-                  >
-                    {displayTitle(t)}
-                  </div>
-                  {!t.analysis && (
-                    <span className="text-[11px] tabular-nums text-muted-foreground">
-                      {formatDuration(t.duration_s)}
-                    </span>
+              <div className="flex min-w-0 items-start gap-2">
+                {selectMode && (
+                  <input
+                    type="checkbox"
+                    className="mt-0.5 h-4 w-4 shrink-0 accent-[var(--primary)]"
+                    checked={isChecked}
+                    onChange={() => toggleSelected(t.id)}
+                    aria-label={`Select ${displayTitle(t)}`}
+                    tabIndex={-1}
+                  />
+                )}
+                <button
+                  onClick={() =>
+                    selectMode ? toggleSelected(t.id) : onSelect(t)
+                  }
+                  className="flex min-w-0 flex-1 items-start gap-2 rounded-md text-left focus-visible:outline-2 focus-visible:outline-ring"
+                >
+                  {!selectMode && (
+                    <Music className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
                   )}
-                </div>
-              </button>
+                  <div className="flex min-w-0 flex-1 flex-col">
+                    <div
+                      className="line-clamp-2 break-words text-sm font-medium leading-snug"
+                      title={t.filename}
+                    >
+                      {displayTitle(t)}
+                    </div>
+                    {!t.analysis && (
+                      <span className="text-[11px] tabular-nums text-muted-foreground">
+                        {formatDuration(t.duration_s)}
+                      </span>
+                    )}
+                  </div>
+                </button>
+                {!selectMode && (
+                  <button
+                    type="button"
+                    onClick={() => handleDeleteClick(t)}
+                    aria-label={
+                      isConfirmingDelete
+                        ? "Confirm delete"
+                        : `Delete ${displayTitle(t)}`
+                    }
+                    title={
+                      isConfirmingDelete
+                        ? "Click again to delete"
+                        : "Delete track"
+                    }
+                    className={cn(
+                      "-mr-1 flex h-6 shrink-0 items-center gap-1 rounded-md px-1 text-[11px] font-medium transition-all focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-ring",
+                      isConfirmingDelete
+                        ? "bg-destructive/15 text-destructive opacity-100 ring-1 ring-destructive/40"
+                        : "text-muted-foreground/60 opacity-0 hover:bg-destructive/10 hover:text-destructive group-hover:opacity-100",
+                    )}
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                    {isConfirmingDelete && "Delete?"}
+                  </button>
+                )}
+              </div>
 
               {t.analysis && (() => {
                 const bpm = t.analysis.bpm
@@ -321,6 +508,7 @@ export function TrackList({
           )
         })}
       </ul>
+      </div>
     </div>
   )
 }

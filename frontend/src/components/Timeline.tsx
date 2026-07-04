@@ -1,10 +1,18 @@
-import { useEffect, useRef } from "react"
+import { useEffect, useRef, useState } from "react"
 import WaveSurfer from "wavesurfer.js"
-import RegionsPlugin, { type Region } from "wavesurfer.js/dist/plugins/regions.esm.js"
+import RegionsPlugin from "wavesurfer.js/dist/plugins/regions.esm.js"
 import TimelinePlugin from "wavesurfer.js/dist/plugins/timeline.esm.js"
 import type { Drop, Track } from "@/api/types"
 import { trackVideoUrl } from "@/api/client"
 import { useEffectiveTheme } from "@/lib/theme"
+import { cn } from "@/lib/utils"
+
+/** Minimum selection length in seconds. */
+const MIN_GAP_S = 1
+/** Snap a dragged handle to a downbeat when within this window. */
+const SNAP_WINDOW_S = 0.15
+/** Height of the waveform drawing area (matches WaveSurfer `height`). */
+const WAVE_HEIGHT = 120
 
 interface TimelineProps {
   track: Track
@@ -18,6 +26,13 @@ interface TimelineProps {
   onReady?: (wavesurfer: WaveSurfer) => void
 }
 
+/** m:ss.cs — precise readout for the drag tooltip. */
+function fmtHandleTime(s: number): string {
+  const m = Math.floor(s / 60)
+  const rest = s - m * 60
+  return `${m}:${rest.toFixed(2).padStart(5, "0")}`
+}
+
 export function Timeline({
   track,
   dropStart,
@@ -28,17 +43,12 @@ export function Timeline({
   onReady,
 }: TimelineProps) {
   const containerRef = useRef<HTMLDivElement>(null)
+  const overlayRef = useRef<HTMLDivElement>(null)
   const wsRef = useRef<WaveSurfer | null>(null)
-  const regionsRef = useRef<RegionsPlugin | null>(null)
-  const startRegionRef = useRef<Region | null>(null)
-  const endRegionRef = useRef<Region | null>(null)
-  const selectionRegionRef = useRef<Region | null>(null)
-  const onChangeRef = useRef(onChange)
-  useEffect(() => {
-    onChangeRef.current = onChange
-  }, [onChange])
+  const [dragging, setDragging] = useState<"start" | "end" | null>(null)
 
   const theme = useEffectiveTheme()
+  const duration = track.duration_s
 
   useEffect(() => {
     if (!containerRef.current) return
@@ -61,7 +71,7 @@ export function Timeline({
       progressColor: "rgba(168, 85, 247, 0.95)",
       cursorColor: isDark ? "rgba(255,255,255,0.8)" : "rgba(24,24,34,0.8)",
       cursorWidth: 2,
-      height: 120,
+      height: WAVE_HEIGHT,
       barWidth: 2,
       barGap: 1,
       barRadius: 1,
@@ -71,74 +81,11 @@ export function Timeline({
     })
 
     wsRef.current = ws
-    regionsRef.current = regions
 
     ws.on("ready", () => {
       // Waveform is visual-only — the master <video> is the audio source.
       ws.setVolume(0)
-      const duration = ws.getDuration()
-      const startEnd = Math.min(dropStart + 0.05, duration)
-      const startRegion = regions.addRegion({
-        id: "drop_start",
-        start: dropStart,
-        end: startEnd,
-        color: "rgba(34, 197, 94, 0.35)",
-        drag: true,
-        resize: false,
-      })
-      const endRegion = regions.addRegion({
-        id: "drop_end",
-        start: Math.max(0, dropEnd - 0.05),
-        end: Math.min(duration, dropEnd),
-        color: "rgba(239, 68, 68, 0.35)",
-        drag: true,
-        resize: false,
-      })
-      startRegionRef.current = startRegion
-      endRegionRef.current = endRegion
-
-      // A 0.05s region is sub-pixel at full-track zoom — rebuild each marker
-      // element into a DAW-style trim handle: a slim glowing line spanning the
-      // waveform with a rounded grip knob on top. Inline styles because the
-      // waveform lives in a shadow root that outside CSS can't reach.
-      const styleHandle = (r: Region, rgb: string, gripTop: boolean) => {
-        const el = (r as unknown as { element?: HTMLElement }).element
-        if (!el) return
-        Object.assign(el.style, {
-          minWidth: "18px",
-          marginLeft: "-9px",
-          background: "transparent",
-          cursor: "ew-resize",
-          zIndex: "6",
-        })
-        el.innerHTML = `
-          <div style="position:absolute;top:0;bottom:0;left:50%;width:2px;
-            transform:translateX(-50%);border-radius:1px;
-            background:rgba(${rgb},0.95);
-            box-shadow:0 0 8px rgba(${rgb},0.7);"></div>
-          <div style="position:absolute;${gripTop ? "top:2px" : "bottom:2px"};left:50%;
-            transform:translateX(-50%);width:14px;height:18px;border-radius:7px;
-            background:linear-gradient(180deg,rgba(${rgb},1),rgba(${rgb},0.75));
-            box-shadow:0 1px 4px rgba(0,0,0,0.5),inset 0 1px 0 rgba(255,255,255,0.35);
-            display:flex;align-items:center;justify-content:center;gap:2px;">
-            <span style="width:1.5px;height:8px;border-radius:1px;background:rgba(255,255,255,0.85)"></span>
-            <span style="width:1.5px;height:8px;border-radius:1px;background:rgba(255,255,255,0.85)"></span>
-          </div>`
-        el.onmouseenter = () => (el.style.filter = "brightness(1.25)")
-        el.onmouseleave = () => (el.style.filter = "")
-      }
-      styleHandle(startRegion, "52, 211, 153", true)
-      styleHandle(endRegion, "251, 113, 133", false)
-
-      // Shaded DAW-style selection band between the trim markers.
-      selectionRegionRef.current = regions.addRegion({
-        id: "selection",
-        start: dropStart,
-        end: Math.min(duration, dropEnd),
-        color: "rgba(168, 85, 247, 0.12)",
-        drag: false,
-        resize: false,
-      })
+      const dur = ws.getDuration()
 
       // Each detected drop gets its own non-draggable highlight band.
       const drops = track.analysis?.drops ?? []
@@ -146,7 +93,7 @@ export function Timeline({
         regions.addRegion({
           id: `drop_${i}`,
           start: d.start_s,
-          end: Math.min(duration, d.end_s),
+          end: Math.min(dur, d.end_s),
           color: "rgba(251, 191, 36, 0.18)", // amber/yellow tint
           drag: false,
           resize: false,
@@ -170,69 +117,13 @@ export function Timeline({
       }),
     )
 
-    // Snap a dragged marker to the nearest downbeat when within 0.2s of one,
-    // so manual trims still land on bar lines (like the auto-detected cuts).
-    const snap = (t: number): number => {
-      const dbs = track.analysis?.downbeats
-      if (!dbs?.length) return t
-      const nearest = dbs.reduce((a, b) =>
-        Math.abs(b - t) < Math.abs(a - t) ? b : a,
-      )
-      return Math.abs(nearest - t) <= 0.2 ? nearest : t
-    }
-
-    subs.push(
-      regions.on("region-updated", (region) => {
-        if (region.id === "drop_start") {
-          const snapped = snap(region.start)
-          if (Math.abs(snapped - region.start) > 0.001) {
-            region.setOptions({ start: snapped, end: snapped + 0.05 })
-          }
-          const end = endRegionRef.current?.start ?? dropEnd
-          onChangeRef.current({
-            dropStart: Math.min(snapped, end - 1),
-            dropEnd: end,
-          })
-        } else if (region.id === "drop_end") {
-          const snapped = snap(region.start)
-          if (Math.abs(snapped - region.start) > 0.001) {
-            region.setOptions({ start: snapped, end: snapped + 0.05 })
-          }
-          const start = startRegionRef.current?.start ?? dropStart
-          onChangeRef.current({
-            dropStart: start,
-            dropEnd: Math.max(snapped, start + 1),
-          })
-        }
-      }),
-    )
-
     return () => {
       subs.forEach((u) => u())
       ws.destroy()
       wsRef.current = null
-      regionsRef.current = null
-      startRegionRef.current = null
-      endRegionRef.current = null
-      selectionRegionRef.current = null
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [track.id, theme])
-
-  useEffect(() => {
-    const s = startRegionRef.current
-    if (s && Math.abs(s.start - dropStart) > 0.01) {
-      s.setOptions({ start: dropStart, end: dropStart + 0.05 })
-    }
-    selectionRegionRef.current?.setOptions({ start: dropStart, end: dropEnd })
-  }, [dropStart, dropEnd])
-
-  useEffect(() => {
-    const e = endRegionRef.current
-    if (e && Math.abs(e.start - dropEnd) > 0.01) {
-      e.setOptions({ start: dropEnd - 0.05, end: dropEnd })
-    }
-  }, [dropEnd])
 
   useEffect(() => {
     const ws = wsRef.current
@@ -244,9 +135,132 @@ export function Timeline({
     }
   }, [externalTime])
 
+  // ---- Manual trim handles -------------------------------------------------
+
+  const timeFromClientX = (clientX: number): number => {
+    const el = overlayRef.current
+    if (!el || duration <= 0) return 0
+    const rect = el.getBoundingClientRect()
+    const frac = Math.min(1, Math.max(0, (clientX - rect.left) / rect.width))
+    return frac * duration
+  }
+
+  const snapToDownbeat = (t: number): number => {
+    const downbeats = track.analysis?.downbeats
+    if (!downbeats?.length) return t
+    let best = t
+    let bestDiff = SNAP_WINDOW_S
+    for (const d of downbeats) {
+      const diff = Math.abs(d - t)
+      if (diff < bestDiff) {
+        bestDiff = diff
+        best = d
+      }
+    }
+    return best
+  }
+
+  const applyHandleTime = (which: "start" | "end", t: number) => {
+    if (which === "start") {
+      const next = Math.min(Math.max(0, t), dropEnd - MIN_GAP_S)
+      if (Math.abs(next - dropStart) < 0.005) return // snap makes moves sticky
+      onChange({ dropStart: next, dropEnd })
+    } else {
+      const next = Math.max(Math.min(duration, t), dropStart + MIN_GAP_S)
+      if (Math.abs(next - dropEnd) < 0.005) return
+      onChange({ dropStart, dropEnd: next })
+    }
+  }
+
+  const startPct = duration > 0 ? (dropStart / duration) * 100 : 0
+  const endPct = duration > 0 ? (dropEnd / duration) * 100 : 0
+
   return (
     <div className="relative w-full">
       <div ref={containerRef} className="w-full rounded-md bg-card p-2" />
+
+      {duration > 0 && (
+        <div
+          ref={overlayRef}
+          className="pointer-events-none absolute left-2 right-2 top-2 z-10"
+          style={{ height: WAVE_HEIGHT }}
+        >
+          {/* Shaded selection between the trim handles, DAW-style. */}
+          <div
+            aria-hidden
+            className="absolute inset-y-0 bg-primary/10 ring-1 ring-inset ring-primary/25"
+            style={{
+              left: `${startPct}%`,
+              width: `${Math.max(0, endPct - startPct)}%`,
+            }}
+          />
+
+          {(["start", "end"] as const).map((which) => {
+            const t = which === "start" ? dropStart : dropEnd
+            const pct = duration > 0 ? (t / duration) * 100 : 0
+            const isStart = which === "start"
+            const isDraggingThis = dragging === which
+            return (
+              <div
+                key={which}
+                role="slider"
+                tabIndex={0}
+                aria-label={isStart ? "Trim start" : "Trim end"}
+                aria-valuemin={0}
+                aria-valuemax={Math.round(duration)}
+                aria-valuenow={Math.round(t)}
+                aria-valuetext={fmtHandleTime(t)}
+                title={`${isStart ? "Start" : "End"} · drag to trim (Shift = no snap)`}
+                className="group pointer-events-auto absolute inset-y-0 w-3 -translate-x-1/2 cursor-ew-resize touch-none outline-none"
+                style={{ left: `${pct}%` }}
+                onPointerDown={(e) => {
+                  e.preventDefault()
+                  e.currentTarget.setPointerCapture(e.pointerId)
+                  setDragging(which)
+                }}
+                onPointerMove={(e) => {
+                  if (dragging !== which) return
+                  const raw = timeFromClientX(e.clientX)
+                  applyHandleTime(which, e.shiftKey ? raw : snapToDownbeat(raw))
+                }}
+                onPointerUp={() => setDragging(null)}
+                onPointerCancel={() => setDragging(null)}
+                onKeyDown={(e) => {
+                  if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return
+                  e.preventDefault()
+                  const step = e.shiftKey ? 1 : 0.1
+                  const delta = e.key === "ArrowLeft" ? -step : step
+                  applyHandleTime(which, t + delta)
+                }}
+              >
+                {/* Grab bar */}
+                <div
+                  className={cn(
+                    "absolute inset-y-0 left-1/2 w-0.5 -translate-x-1/2 rounded-full transition-[width,background-color]",
+                    isStart ? "bg-emerald-500/80" : "bg-rose-500/80",
+                    "group-hover:w-1 group-focus-visible:w-1",
+                    isDraggingThis && "w-1",
+                  )}
+                />
+                {/* Grip nub */}
+                <div
+                  className={cn(
+                    "absolute left-1/2 h-3.5 w-2.5 -translate-x-1/2 rounded-sm ring-1 ring-black/20",
+                    isStart ? "top-0 bg-emerald-500" : "bottom-0 bg-rose-500",
+                    "group-focus-visible:ring-2 group-focus-visible:ring-ring",
+                  )}
+                />
+                {/* Time tooltip while dragging */}
+                {isDraggingThis && (
+                  <div className="absolute -top-7 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-md border border-border/60 bg-popover px-1.5 py-0.5 font-mono text-[11px] tabular-nums text-popover-foreground shadow-md">
+                    {fmtHandleTime(t)}
+                  </div>
+                )}
+              </div>
+            )
+          })}
+        </div>
+      )}
     </div>
   )
 }

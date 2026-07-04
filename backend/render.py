@@ -26,7 +26,7 @@ VIDEOS_DIR = PROJECT_ROOT / "videos"
 RENDER_TMP_DIR = BACKEND_DIR / ".cache" / "renders"
 ASSETS_DIR = PROJECT_ROOT / "assets"
 LOGO_PATH = ASSETS_DIR / "edmpapa11.png"
-FONT_PATH = ASSETS_DIR / "Cubano.ttf"
+FONT_PATH = ASSETS_DIR / "Bebas-Regular.ttf"
 
 # EDMPAPA branding geometry (1920x1080 canvas).
 _BRAND_W = 1920
@@ -140,21 +140,34 @@ def _extract_clip_audio(src: Path, start_s: float, duration_s: float, out_wav: P
 
 
 def _time_stretch_wav(in_wav: Path, out_wav: Path, ratio: float) -> None:
-    """Time-stretch via pyrubberband. ratio = target_duration / source_duration."""
-    import soundfile as sf
+    """Time-stretch. ratio = target_duration / source_duration.
 
-    if abs(ratio - 1.0) < 0.005 or not _has_rubberband():
+    Prefers rubberband; falls back to ffmpeg's atempo filter, which is
+    pitch-preserving and sounds clean for the small beat-matching ratios
+    (±8%) this pipeline uses."""
+    if abs(ratio - 1.0) < 0.005:
         shutil.copy(in_wav, out_wav)
         return
-    y, sr = sf.read(str(in_wav), always_2d=True)
-    import pyrubberband as pyrb
-    # pyrb.time_stretch's "rate" speeds up audio: rate>1 -> shorter.
-    # If we want output duration = ratio * input_duration -> rate = 1/ratio.
-    rate = 1.0 / ratio
-    stretched_channels = [pyrb.time_stretch(y[:, c], sr, rate) for c in range(y.shape[1])]
-    minlen = min(len(c) for c in stretched_channels)
-    out = np.stack([c[:minlen] for c in stretched_channels], axis=1)
-    sf.write(str(out_wav), out, sr)
+    if _has_rubberband():
+        import soundfile as sf
+        y, sr = sf.read(str(in_wav), always_2d=True)
+        import pyrubberband as pyrb
+        # pyrb.time_stretch's "rate" speeds up audio: rate>1 -> shorter.
+        # If we want output duration = ratio * input_duration -> rate = 1/ratio.
+        rate = 1.0 / ratio
+        stretched_channels = [pyrb.time_stretch(y[:, c], sr, rate) for c in range(y.shape[1])]
+        minlen = min(len(c) for c in stretched_channels)
+        out = np.stack([c[:minlen] for c in stretched_channels], axis=1)
+        sf.write(str(out_wav), out, sr)
+        return
+    # atempo factor is a speed multiplier (>1 = faster/shorter); valid 0.5-100.
+    tempo = max(0.5, min(2.0, 1.0 / ratio))
+    cmd = [
+        "ffmpeg", "-y", "-i", str(in_wav),
+        "-af", f"atempo={tempo:.6f}",
+        "-ar", "44100", "-ac", "2", str(out_wav),
+    ]
+    subprocess.run(cmd, check=True, capture_output=True)
 
 
 def _loudnorm_two_pass(in_wav: Path, out_wav: Path, target_lufs: float) -> None:
@@ -464,7 +477,7 @@ def _write_title_ass(title_windows: list[tuple[str, float, float]], out_ass: Pat
         "OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, "
         "ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, "
         "Alignment, MarginL, MarginR, MarginV, Encoding",
-        f"Style: Title,Cubano,{_TITLE_FONT_SIZE},&H00FFFFFF,&H00FFFFFF,"
+        f"Style: Title,Bebas,{_TITLE_FONT_SIZE},&H00FFFFFF,&H00FFFFFF,"
         "&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,0,0,5,0,0,0,1",
         "",
         "[Events]",
@@ -703,6 +716,7 @@ def render_mix(
     clip_videos: list[Path] = []
     clip_audios: list[Path] = []
     clip_stems: list[dict[str, Path] | None] = []
+    clip_ratios: list[float] = []
 
     n_clips = len(clips)
     for idx, clip in enumerate(clips):
@@ -731,6 +745,11 @@ def render_mix(
         # no_stretch: each clip plays at its source BPM (no time-stretch at all).
         # target_bpm is ignored in this mode.
         out_ratio = 1.0 if no_stretch else (src_bpm / target_bpm)
+        # Beat-matching only works cleanly for small stretches; beyond ±8%
+        # the artifacts outweigh the alignment, so that clip stays native.
+        if abs(out_ratio - 1.0) > 0.08:
+            out_ratio = 1.0
+        clip_ratios.append(out_ratio)
 
         clip_dir = work / f"clip_{idx:02d}"
         clip_dir.mkdir(parents=True, exist_ok=True)
@@ -797,7 +816,7 @@ def render_mix(
         progress("render", 70.0, "Mixing audio with crossfades")
     default_crossfade_s = _bars_to_seconds(crossfade_bars, target_bpm)
 
-    def _crossfade_for(b_clip: dict) -> float:
+    def _crossfade_for(b_clip: dict, b_ratio: float = 1.0) -> float:
         # Overlap only the START of the incoming clip's buildup with the
         # outgoing drop's tail. Overlapping the whole buildup (old behavior)
         # buried the riser under the previous drop and produced a flat wall of
@@ -807,7 +826,7 @@ def render_mix(
         kick = b_clip.get("kick_s")
         start = b_clip.get("start_s")
         if kick is not None and start is not None and float(kick) > float(start):
-            buildup = float(kick) - float(start)
+            buildup = (float(kick) - float(start)) * b_ratio
             return min(buildup, default_crossfade_s)
         return default_crossfade_s
 
@@ -823,7 +842,7 @@ def render_mix(
         merged = work / f"merged_{i:02d}.wav"
         a_stems = clip_stems[i - 1]
         b_stems = clip_stems[i]
-        cf_s = _crossfade_for(clips[i])
+        cf_s = _crossfade_for(clips[i], clip_ratios[i])
         crossfade_durations.append(cf_s)
         can_use_stems = i == 1 and a_stems and b_stems
         if can_use_stems and use_eq_swap:

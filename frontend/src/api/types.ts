@@ -80,6 +80,23 @@ export interface RenderConfig {
   proxy?: boolean
 }
 
+export interface MixRecord {
+  filename: string
+  /** Relative path like "videos/automix_...mp4" — link as `/${path}`. */
+  path: string
+  size_bytes: number
+  created_at: string
+}
+
+export interface DeleteResponse {
+  deleted: boolean
+}
+
+export interface RefreshTitlesResponse {
+  updated: number
+  changes: unknown[]
+}
+
 export interface YoutubeImportRequest {
   url: string
   max_tracks?: number | null

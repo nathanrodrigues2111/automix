@@ -67,6 +67,7 @@ export function MixEditor({
   onLoadProject,
 }: MixEditorProps) {
   const [query, setQuery] = useState("")
+  const [confirmClear, setConfirmClear] = useState(false)
   const trackById = useMemo(
     () => Object.fromEntries(tracks.map((t) => [t.id, t])),
     [tracks],
@@ -204,15 +205,40 @@ export function MixEditor({
           <div className="text-[11px] font-semibold uppercase tracking-widest text-primary/80">
             Clips · {clips.length}
           </div>
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={autoOrder}
-            disabled={clips.length < 2}
-            className="h-7 text-xs"
-          >
-            <Wand2 className="h-3 w-3" /> Auto-order (Camelot)
-          </Button>
+          <div className="flex items-center gap-1">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={autoOrder}
+              disabled={clips.length < 2}
+              className="h-7 text-xs"
+            >
+              <Wand2 className="h-3 w-3" /> Auto-order (Camelot)
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              disabled={clips.length === 0}
+              onClick={() => {
+                if (!confirmClear) {
+                  setConfirmClear(true)
+                  window.setTimeout(() => setConfirmClear(false), 3000)
+                  return
+                }
+                setConfirmClear(false)
+                setClips([])
+              }}
+              className={cn(
+                "h-7 text-xs",
+                confirmClear
+                  ? "bg-destructive/15 text-destructive hover:bg-destructive/25 hover:text-destructive"
+                  : "text-muted-foreground",
+              )}
+            >
+              <Trash2 className="h-3 w-3" />
+              {confirmClear ? "Really clear?" : "Clear all"}
+            </Button>
+          </div>
         </div>
 
         {clips.length > 3 && (

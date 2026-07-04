@@ -8,6 +8,7 @@ import {
   ChevronDown,
   ChevronRight,
   Download,
+  FolderOpen,
   ListChecks,
   Loader2,
   RotateCcw,
@@ -30,6 +31,7 @@ import {
   useAutomix,
   useCancelJob,
   usePlaylistEntries,
+  useRevealFile,
   useYoutubeImport,
   mediaUrl,
 } from "@/api/client"
@@ -71,6 +73,7 @@ export function AutomixPanel({ progress, variant = "card" }: AutomixPanelProps) 
   const youtubeImport = useYoutubeImport()
   const playlistEntries = usePlaylistEntries()
   const cancelJob = useCancelJob()
+  const reveal = useRevealFile()
 
   // Playlist track chooser.
   const [chooserOpen, setChooserOpen] = useState(false)
@@ -663,6 +666,19 @@ export function AutomixPanel({ progress, variant = "card" }: AutomixPanelProps) 
                 {fileName}
               </span>
               <div className="flex shrink-0 gap-2">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() =>
+                    outputPath &&
+                    reveal.mutate(outputPath, {
+                      onError: (e) =>
+                        toast.error(`Could not open folder: ${e.message}`),
+                    })
+                  }
+                >
+                  <FolderOpen className="h-3.5 w-3.5" /> Open folder
+                </Button>
                 <Button
                   asChild
                   size="sm"

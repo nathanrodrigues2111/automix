@@ -391,6 +391,45 @@ async def get_video(track_id: str, request: Request):
     )
 
 
+class RevealRequest(schemas.BaseModel):
+    path: str = ""  # repo-relative file path; empty = the exports folder
+
+
+@app.post("/api/reveal")
+async def post_reveal(req: RevealRequest) -> dict:
+    """Open the containing folder in the system file manager (local tool).
+    Tries FileManager1 ShowItems (selects the file), falls back to xdg-open
+    on the directory."""
+    target = (PROJECT_ROOT / req.path.lstrip("/")).resolve() if req.path else EXPORTS_DIR
+    if not str(target).startswith(str(VIDEOS_DIR.resolve())):
+        raise HTTPException(status_code=400, detail="path outside the videos library")
+    if not target.exists():
+        raise HTTPException(status_code=404, detail="file not found")
+
+    def _run() -> str:
+        if target.is_file():
+            try:
+                subprocess.run(
+                    [
+                        "gdbus", "call", "--session",
+                        "--dest", "org.freedesktop.FileManager1",
+                        "--object-path", "/org/freedesktop/FileManager1",
+                        "--method", "org.freedesktop.FileManager1.ShowItems",
+                        f"['file://{target}']", "",
+                    ],
+                    check=True, capture_output=True, timeout=10,
+                )
+                return "selected"
+            except Exception:
+                pass
+        folder = target if target.is_dir() else target.parent
+        subprocess.Popen(["xdg-open", str(folder)],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return "opened"
+
+    return {"result": await asyncio.to_thread(_run)}
+
+
 @app.post("/api/analyze-all")
 async def post_analyze_all() -> dict:
     """Analyze every track that has no cached analysis, sequentially in one

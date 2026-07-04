@@ -184,6 +184,16 @@ export function useAnalyzeAll() {
   })
 }
 
+export function useRevealFile() {
+  return useMutation({
+    mutationFn: (path: string) =>
+      http<{ result: string }>("/api/reveal", {
+        method: "POST",
+        body: JSON.stringify({ path }),
+      }),
+  })
+}
+
 export function useCancelJob() {
   return useMutation({
     mutationFn: (jobId: string) =>

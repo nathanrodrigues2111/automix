@@ -50,6 +50,7 @@ export function RenderDialog({
   const isPreview = mode === "preview"
   const render = useRender()
   const cancelJob = useCancelJob()
+  const reveal = useRevealFile()
   const [jobId, setJobId] = useState<string | null>(null)
   const [resolution, setResolution] = useState<string>(
     config.resolution ?? "1080p",
@@ -162,14 +163,17 @@ export function RenderDialog({
               </div>
               <div className="flex shrink-0 gap-1.5">
                 <Button
-                  asChild
                   variant="ghost"
                   size="sm"
                   className="h-7 text-xs"
+                  onClick={() =>
+                    reveal.mutate(outputPath, {
+                      onError: (e) =>
+                        toast.error(`Could not open folder: ${e.message}`),
+                    })
+                  }
                 >
-                  <a href={mediaUrl(outputPath)} target="_blank" rel="noreferrer">
-                    <FolderOpen className="h-3 w-3" /> Open file
-                  </a>
+                  <FolderOpen className="h-3 w-3" /> Open folder
                 </Button>
                 <Button asChild size="sm" className="h-7 text-xs">
                   <a

@@ -351,7 +351,10 @@ export function TrackList({
     ? items.filter(
         (t) =>
           displayTitle(t).toLowerCase().includes(q) ||
-          t.filename.toLowerCase().includes(q),
+          t.filename.toLowerCase().includes(q) ||
+          (t.analysis?.drops ?? []).some((d) =>
+            (d.title ?? "").toLowerCase().includes(q),
+          ),
       )
     : items
   const allSelected = items.length > 0 && selectedIds.size === items.length
@@ -718,7 +721,19 @@ export function TrackList({
                   </Button>
                 ) : (
                   (() => {
-                    const drops = t.analysis?.drops ?? []
+                    const allDrops = t.analysis?.drops ?? []
+                    const trackNameMatch =
+                      !q ||
+                      displayTitle(t).toLowerCase().includes(q) ||
+                      t.filename.toLowerCase().includes(q)
+                    const dropPairs = allDrops
+                      .map((d, i) => ({ d, i }))
+                      .filter(
+                        ({ d }) =>
+                          trackNameMatch ||
+                          (d.title ?? "").toLowerCase().includes(q),
+                      )
+                    const drops = dropPairs.map((p) => p.d)
                     if (drops.length === 0) {
                       return (
                         <Button
@@ -751,7 +766,7 @@ export function TrackList({
                             </Button>
                           </li>
                         )}
-                        {drops.map((d, i) => {
+                        {dropPairs.map(({ d, i }) => {
                           const dropKey = `${t.id}:${d.start_s.toFixed(2)}`
                           const isAdded = !!addedKeys?.has(dropKey)
                           const isPlayingThis = playingKey === dropKey

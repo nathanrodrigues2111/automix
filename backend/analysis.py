@@ -541,19 +541,42 @@ def label_drops_with_cues(
         for d in drops:
             kick = float(d.get("kick_s") or d.get("start_s") or 0.0)
             current = None
-            for c in timed:
+            for ci, c in enumerate(timed):
                 if float(c["t_s"]) <= kick + 1.0:
-                    current = c
+                    current = (ci, c)
                 else:
                     break
             if current:
-                d["title"] = current["title"]
+                d["title"] = current[1]["title"]
+                d["_cue_i"] = current[0]
                 labeled += 1
     else:
         for d, c in zip(drops, cues):
             d["title"] = c["title"]
             labeled += 1
     return labeled
+
+
+def apply_cues(
+    drops: list[dict[str, Any]], cues: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Label drops with cues, then keep only the BEST-scoring drop per cue
+    segment: several detections inside one song read as duplicates in the
+    UI. Unlabeled drops are kept as-is."""
+    label_drops_with_cues(drops, cues)
+    best: dict[int, dict[str, Any]] = {}
+    out: list[dict[str, Any]] = []
+    for d in drops:
+        ci = d.pop("_cue_i", None)
+        if ci is None:
+            out.append(d)
+            continue
+        cur = best.get(ci)
+        if cur is None or float(d.get("score", 0)) > float(cur.get("score", 0)):
+            best[ci] = d
+    out.extend(best.values())
+    out.sort(key=lambda d: float(d.get("start_s", 0.0)))
+    return out
 
 
 def _run_allin1(wav_path: Path, progress: ProgressCb = None) -> dict[str, Any]:

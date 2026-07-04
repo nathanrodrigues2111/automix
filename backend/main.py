@@ -230,7 +230,8 @@ def _scan_tracks() -> list[dict]:
                     cached["drops"] = drops
                     cached["drops_version"] = analysis_mod.DROPS_VERSION
                     if cached.get("cues"):
-                        analysis_mod.label_drops_with_cues(drops, cached["cues"])
+                        drops = analysis_mod.apply_cues(drops, cached["cues"])
+                        cached["drops"] = drops
                     db.put_analysis(fh, cached)
                 except Exception:
                     cached["drops"] = []
@@ -285,7 +286,9 @@ async def post_analyze(req: schemas.AnalyzeRequest) -> dict:
             prior = db.get_analysis(fh)
             if prior and prior.get("cues"):
                 result["cues"] = prior["cues"]
-                analysis_mod.label_drops_with_cues(result.get("drops") or [], prior["cues"])
+                result["drops"] = analysis_mod.apply_cues(
+                    result.get("drops") or [], prior["cues"]
+                )
             db.put_analysis(fh, result)
             progress("analysis", 100.0, "Analysis complete")
         except Exception as e:
@@ -900,9 +903,11 @@ async def post_track_cues(track_id: str, req: TracklistRequest) -> dict:
         cached = db.get_analysis(fh)
         if cached is None:
             raise ValueError("analyze the track first")
-        labeled = analysis_mod.label_drops_with_cues(cached.get("drops") or [], cues)
+        drops = analysis_mod.apply_cues(cached.get("drops") or [], cues)
+        cached["drops"] = drops
         cached["cues"] = cues
         db.put_analysis(fh, cached)
+        labeled = sum(1 for d in drops if d.get("title"))
         return {"cues": len(cues), "labeled": labeled}
 
     try:

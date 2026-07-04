@@ -2,6 +2,11 @@
 
 @custom-variant dark (&:is(.dark *));
 
+@keyframes progress-shimmer {
+  0% { background-position: -60% 0; }
+  100% { background-position: 160% 0; }
+}
+
 /* Brand title font — same file the renderer burns into the video. */
 @font-face {
   font-family: "Bebas";

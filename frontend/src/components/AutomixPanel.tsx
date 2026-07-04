@@ -8,6 +8,7 @@ import {
   ChevronDown,
   ChevronRight,
   Download,
+  ListChecks,
   Loader2,
   RotateCcw,
   Wand2,
@@ -15,11 +16,20 @@ import {
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Player } from "@/components/Player"
 import { Progress } from "@/components/ui/progress"
-import { useAutomix, useYoutubeImport } from "@/api/client"
+import { useAutomix, usePlaylistEntries, useYoutubeImport } from "@/api/client"
+import type { PlaylistEntry } from "@/api/types"
 import type { ProgressMap } from "@/hooks/useProgressSocket"
+import { formatDuration } from "@/lib/format"
 import { cn } from "@/lib/utils"
 
 type JobKind = "automix" | "import"
@@ -53,6 +63,14 @@ export function AutomixPanel({ progress, variant = "card" }: AutomixPanelProps) 
   const qc = useQueryClient()
   const automix = useAutomix()
   const youtubeImport = useYoutubeImport()
+  const playlistEntries = usePlaylistEntries()
+
+  // Playlist track chooser.
+  const [chooserOpen, setChooserOpen] = useState(false)
+  const [entries, setEntries] = useState<PlaylistEntry[]>([])
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+  // When on, ignore the per-track selection and take the whole playlist.
+  const [wholePlaylist, setWholePlaylist] = useState(false)
 
   const [url, setUrl] = useState("")
   const [maxTracks, setMaxTracks] = useState("")
@@ -172,6 +190,52 @@ export function AutomixPanel({ progress, variant = "card" }: AutomixPanelProps) 
     youtubeImport.reset()
   }
 
+  const openChooser = () => {
+    const u = validateUrl()
+    if (!u) return
+    playlistEntries.mutate(
+      { url: u, max_tracks: parsedMaxTracks() },
+      {
+        onSuccess: (list) => {
+          setEntries(list)
+          setSelectedIds(new Set(list.map((e) => e.id)))
+          setWholePlaylist(false)
+          setChooserOpen(true)
+        },
+        onError: (e) => toast.error(`Could not load playlist: ${e.message}`),
+      },
+    )
+  }
+
+  const toggleEntry = (id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
+  const startWithSelection = (kind: JobKind) => {
+    const u = url.trim()
+    // null = no filter: the backend takes the entire playlist.
+    const ids = wholePlaylist ? null : [...selectedIds]
+    if (!u || (ids !== null && ids.length === 0)) return
+    setChooserOpen(false)
+    const body = { url: u, max_tracks: null, video_ids: ids }
+    if (kind === "automix") {
+      automix.mutate(body, {
+        onSuccess: (res) => setJob({ id: res.job_id, kind: "automix" }),
+        onError: (e) => toast.error(`Auto-Mix failed: ${e.message}`),
+      })
+    } else {
+      youtubeImport.mutate(body, {
+        onSuccess: (res) => setJob({ id: res.job_id, kind: "import" }),
+        onError: (e) => toast.error(`Import failed: ${e.message}`),
+      })
+    }
+  }
+
   const visibleStages =
     job?.kind === "import" ? STAGES.slice(0, 1) : STAGES
   const stageIdx = p ? STAGES.findIndex((s) => s.key === p.stage) : -1
@@ -256,8 +320,122 @@ export function AutomixPanel({ progress, variant = "card" }: AutomixPanelProps) 
               )}
               Import only
             </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={running || playlistEntries.isPending}
+              onClick={openChooser}
+              title="List the playlist's tracks and choose which ones to import or mix"
+              className={cn(
+                "shrink-0 bg-background/40 text-xs",
+                compact ? "h-8" : "h-9",
+              )}
+            >
+              {playlistEntries.isPending ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <ListChecks className="h-3.5 w-3.5" />
+              )}
+              Choose
+            </Button>
           </div>
         </form>
+  )
+
+  const chooserEl = (
+    <Dialog open={chooserOpen} onOpenChange={setChooserOpen}>
+      <DialogContent className="flex max-h-[80vh] flex-col sm:max-w-lg">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <ListChecks className="h-4 w-4 text-primary" />
+            Choose tracks · {selectedIds.size}/{entries.length}
+          </DialogTitle>
+        </DialogHeader>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <label
+            className={cn(
+              "flex cursor-pointer items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground",
+              wholePlaylist && "pointer-events-none opacity-40",
+            )}
+          >
+            <input
+              type="checkbox"
+              className="h-3.5 w-3.5 accent-[var(--primary)]"
+              disabled={wholePlaylist}
+              checked={entries.length > 0 && selectedIds.size === entries.length}
+              onChange={() =>
+                setSelectedIds(
+                  selectedIds.size === entries.length
+                    ? new Set()
+                    : new Set(entries.map((e) => e.id)),
+                )
+              }
+            />
+            Select all
+          </label>
+          <label className="flex cursor-pointer items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground">
+            <input
+              type="checkbox"
+              className="h-3.5 w-3.5 accent-[var(--primary)]"
+              checked={wholePlaylist}
+              onChange={(e) => setWholePlaylist(e.target.checked)}
+            />
+            Whole playlist
+          </label>
+        </div>
+        <ul
+          className={cn(
+            "min-h-0 flex-1 divide-y divide-border/40 overflow-y-auto rounded-lg border border-border/60",
+            wholePlaylist && "pointer-events-none opacity-40",
+          )}
+        >
+          {entries.map((e, i) => (
+            <li key={e.id}>
+              <label className="flex cursor-pointer items-center gap-2.5 px-3 py-2 transition-colors hover:bg-accent/30">
+                <input
+                  type="checkbox"
+                  className="h-4 w-4 shrink-0 accent-[var(--primary)]"
+                  checked={selectedIds.has(e.id)}
+                  onChange={() => toggleEntry(e.id)}
+                />
+                <span className="w-5 shrink-0 text-right font-mono text-[11px] tabular-nums text-muted-foreground/60">
+                  {i + 1}
+                </span>
+                <span className="min-w-0 flex-1 truncate text-sm" title={e.title}>
+                  {e.title}
+                </span>
+                {e.duration_s != null && (
+                  <span className="shrink-0 font-mono text-[11px] tabular-nums text-muted-foreground">
+                    {formatDuration(e.duration_s)}
+                  </span>
+                )}
+              </label>
+            </li>
+          ))}
+        </ul>
+        <DialogFooter className="gap-2 sm:gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={!wholePlaylist && selectedIds.size === 0}
+            onClick={() => startWithSelection("import")}
+          >
+            <Download className="h-3.5 w-3.5" /> Import{" "}
+            {wholePlaylist ? "all" : selectedIds.size}
+          </Button>
+          <Button
+            size="sm"
+            disabled={!wholePlaylist && selectedIds.size === 0}
+            onClick={() => startWithSelection("automix")}
+            className="bg-gradient-to-r from-primary to-fuchsia-500 text-primary-foreground hover:from-primary hover:to-fuchsia-400"
+          >
+            <Wand2 className="h-3.5 w-3.5" /> Auto-Mix{" "}
+            {wholePlaylist ? "all" : selectedIds.size}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 
   const statusEl = (
@@ -465,6 +643,7 @@ export function AutomixPanel({ progress, variant = "card" }: AutomixPanelProps) 
     const hasStatus = !!urlError || !!job
     return (
       <div className="relative min-w-0 flex-1">
+        {chooserEl}
         {formEl}
         {hasStatus && !panelHidden && (
           <div className="absolute inset-x-0 top-full z-50 mt-2 space-y-3 rounded-xl border border-border/60 bg-popover/95 p-3 pt-8 shadow-2xl backdrop-blur">
@@ -503,6 +682,7 @@ export function AutomixPanel({ progress, variant = "card" }: AutomixPanelProps) 
             </p>
           </div>
         </div>
+        {chooserEl}
         {formEl}
         {statusEl}
       </CardContent>

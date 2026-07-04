@@ -153,7 +153,7 @@ def _snap_to_downbeat(t: float, downbeats: list[float]) -> float:
     return min(downbeats, key=lambda d: abs(d - t))
 
 
-DROPS_VERSION = 3
+DROPS_VERSION = 5
 
 
 def find_drops(
@@ -313,6 +313,60 @@ def find_drops(
                         )
         return bass_frac, bass_lift, periodicity
 
+    def _refine_kick(t: float) -> float:
+        """Snap `t` to the nearest true kick attack (steep low-band rise).
+        The downbeat grid (fallback beat tracking) can sit a fraction of a
+        beat off the real kicks — mix seams are phrase-cut from kick_s, so
+        this phase error is audible as a stumble."""
+        # The drop's FIRST kick peak in a window biased forward of the grid
+        # estimate; then walk back to the attack. Anchoring on the first body
+        # kick (rather than the steepest rise near t) avoids locking onto an
+        # offbeat bass hit, which made seams flam by ~half a beat.
+        w0 = max(0, int((t - 0.35) * sr / hop))
+        w1 = min(len(rms_low), int((t + 0.60) * sr / hop))
+        seg = rms_low[w0:w1]
+        if seg.size < 6:
+            return t
+        pk, _ = find_peaks(
+            seg,
+            prominence=float(np.max(seg)) * 0.2,
+            distance=max(1, int(0.22 * sr / hop)),
+        )
+        if not len(pk):
+            return t
+        p = int(pk[0])
+        a0 = max(0, p - 6)
+        d = np.diff(seg[a0 : p + 1])
+        off = a0 + (int(np.argmax(d)) if d.size else 0)
+        return float(librosa.frames_to_time(w0 + off + 1, sr=sr, hop_length=hop))
+
+    def _snap_end_to_kick_grid(end_t: float) -> float:
+        """Cut exactly one kick-period after the clip's last true kick before
+        `end_t`. Absolute `kick + n_bars * bar_s` math drifts with any BPM
+        estimation error; measuring the local kick grid empirically puts the
+        cut precisely where the next kick would land — which is where the
+        incoming clip's kick slams in during the mix."""
+        # Look back up to 4 bars: a drop whose energy dies early has no kicks
+        # right before the quantized end — pull the cut back to the last real
+        # kick instead of dragging dead air into the transition.
+        w0 = max(0, int((end_t - 4.0 * bar_s) * sr / hop))
+        w1 = min(len(rms_low), int(end_t * sr / hop))
+        seg = rms_low[w0:w1]
+        if seg.size < 8:
+            return end_t
+        pk, _ = find_peaks(
+            seg,
+            distance=max(1, int(0.25 * sr / hop)),
+            prominence=float(np.max(seg)) * 0.15,
+        )
+        if len(pk) < 3:
+            return end_t
+        times = librosa.frames_to_time(w0 + pk, sr=sr, hop_length=hop)
+        period = float(np.median(np.diff(times)))
+        if not 0.25 <= period <= 1.0:  # not a steady kick pattern
+            return end_t
+        return float(times[-1]) + period
+
     drops: list[dict[str, Any]] = []
     rejected: list[dict[str, Any]] = []
     for idx in order:
@@ -329,25 +383,20 @@ def find_drops(
             kick_i = min(range(len(dbs)), key=lambda i: abs(dbs[i] - drop_t))
             kick_t = dbs[kick_i]
         else:
-            kick_i = None
             kick_t = drop_t
+        # Phase-correct to the actual kick attack, then cut the end an EXACT
+        # number of bars later — quantizing via the (possibly phase-shifted)
+        # downbeat grid put clip ends a fraction of a beat off the true kicks,
+        # which made mix transitions stumble.
+        kick_t = _refine_kick(kick_t)
 
         natural_end = _scan_drop_end(peak_idx)
         sustain_s = max(0.0, natural_end - kick_t)
-        # 8 bars when the drop's energy actually sustains that long, else 4.
-        n_bars = 8 if sustain_s >= 7.0 * bar_s else 4
-
-        if kick_i is not None and len(dbs) > 1:
-            # The grid may be spaced at 2 bars (half-tempo beat tracking that
-            # was octave-corrected) — convert the bar count to grid steps.
-            spacing = float(np.median(np.diff(dbs)))
-            steps = max(1, round(n_bars * bar_s / spacing)) if spacing > 0 else n_bars
-            if kick_i + steps < len(dbs):
-                end = dbs[kick_i + steps]
-            else:
-                end = min(duration, kick_t + n_bars * bar_s)
-        else:
-            end = min(duration, kick_t + n_bars * bar_s)
+        # 8 bars only when the drop's energy actually sustains the full run —
+        # otherwise the clip drags dead air into the next transition.
+        n_bars = 8 if sustain_s >= 8.0 * bar_s else 4
+        end = min(duration, kick_t + n_bars * bar_s)
+        end = min(duration, _snap_end_to_kick_grid(end))
 
         # A drop body shorter than ~3.5 bars (kick too close to the end of the
         # track) is unusable as a mix clip.
@@ -373,10 +422,47 @@ def find_drops(
             continue
 
         bass_frac, bass_lift, periodicity = _body_metrics(kick_t)
+
+        # Measured kick period of the drop body — the global BPM estimate can
+        # be ~1% off, which makes beat-matched stretches drift audibly across
+        # a transition. Frame-resolution peaks quantize to 23ms (can't resolve
+        # 1%), so refine each peak sub-frame (parabolic) and fit the period by
+        # least squares across the whole body.
+        kick_period = 0.0
+        b0 = max(0, int(kick_t * sr / hop))
+        b1 = min(len(rms_low), max(b0 + 8, int(end * sr / hop)))
+        body = rms_low[b0:b1]
+        if body.size > 8:
+            bpk, _ = find_peaks(
+                body,
+                distance=max(1, int(0.25 * sr / hop)),
+                prominence=float(np.max(body)) * 0.15,
+            )
+            if len(bpk) >= 5:
+                ts = []
+                for pi in bpk:
+                    i0 = b0 + int(pi)
+                    off = 0.0
+                    if 0 < i0 < len(rms_low) - 1:
+                        a_, m_, c_ = rms_low[i0 - 1], rms_low[i0], rms_low[i0 + 1]
+                        den = a_ - 2 * m_ + c_
+                        if abs(den) > 1e-12:
+                            off = float(np.clip(0.5 * (a_ - c_) / den, -0.5, 0.5))
+                    ts.append((i0 + off) * hop / sr)
+                ts = np.asarray(ts)
+                med = float(np.median(np.diff(ts)))
+                if 0.25 <= med <= 1.0:
+                    steps = np.round((ts - ts[0]) / med)
+                    A = np.vstack([steps, np.ones_like(steps)]).T
+                    slope = float(np.linalg.lstsq(A, ts, rcond=None)[0][0])
+                    if 0.25 <= slope <= 1.0:
+                        kick_period = slope
+
         candidate = {
             "start_s": float(start),
             "end_s": float(end),
             "kick_s": float(kick_t),
+            "kick_period_s": kick_period or None,
             # Steady-kick bodies outrank equally-loud vocal sections.
             "score": float(heights[idx]) * (1.0 + 0.5 * periodicity),
         }

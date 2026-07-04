@@ -5,6 +5,7 @@ import {
 } from "@tanstack/react-query"
 import type {
   AnalyzeRequest,
+  PlaylistEntry,
   AutomixRequest,
   DeleteResponse,
   JobResponse,
@@ -147,6 +148,16 @@ export function useYoutubeImport() {
   return useMutation({
     mutationFn: (body: YoutubeImportRequest) =>
       http<JobResponse>("/api/youtube/import", {
+        method: "POST",
+        body: JSON.stringify(body),
+      }),
+  })
+}
+
+export function usePlaylistEntries() {
+  return useMutation({
+    mutationFn: (body: { url: string; max_tracks?: number | null }) =>
+      http<PlaylistEntry[]>("/api/youtube/entries", {
         method: "POST",
         body: JSON.stringify(body),
       }),

@@ -100,12 +100,21 @@ export interface RefreshTitlesResponse {
 export interface YoutubeImportRequest {
   url: string
   max_tracks?: number | null
+  video_ids?: string[] | null
+}
+
+export interface PlaylistEntry {
+  id: string
+  title: string
+  uploader: string
+  duration_s: number | null
 }
 
 export interface AutomixRequest {
   url?: string | null
   track_ids?: string[] | null
   max_tracks?: number | null
+  video_ids?: string[] | null
   config?: Partial<Omit<RenderConfig, "clips">>
 }
 

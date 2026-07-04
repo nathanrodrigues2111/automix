@@ -346,6 +346,30 @@ async def get_video(track_id: str, request: Request):
     )
 
 
+@app.post("/api/youtube/entries")
+async def post_youtube_entries(req: schemas.YouTubeEntriesRequest) -> list[dict]:
+    """Flat playlist listing so the user can pick which tracks to import."""
+
+    def _run() -> list[dict]:
+        entries = youtube_mod._flat_entries(req.url, req.max_tracks)
+        out = []
+        for e in entries:
+            out.append(
+                {
+                    "id": str(e.get("id")),
+                    "title": youtube_mod.clean_title(str(e.get("title") or e.get("id"))),
+                    "uploader": str(e.get("uploader") or e.get("channel") or ""),
+                    "duration_s": float(e["duration"]) if e.get("duration") else None,
+                }
+            )
+        return out
+
+    try:
+        return await asyncio.to_thread(_run)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 @app.post("/api/render")
 async def post_render(req: schemas.RenderRequest) -> dict:
     job_id = uuid.uuid4().hex
@@ -395,7 +419,12 @@ async def post_youtube_import(req: schemas.YouTubeImportRequest) -> dict:
     async def _run():
         try:
             results = await asyncio.to_thread(
-                youtube_mod.import_playlist, req.url, IMPORTS_DIR, progress, req.max_tracks
+                youtube_mod.import_playlist,
+                req.url,
+                IMPORTS_DIR,
+                progress,
+                req.max_tracks,
+                req.video_ids
             )
             hub.publish_sync(
                 {
@@ -429,10 +458,10 @@ AUTOMIX_DEFAULT_CONFIG: dict[str, Any] = {
     # hold ~129 BPM throughout. Clips >8% off stay native (render.py clamps).
     "no_time_stretch": False,
     "snap_to_downbeat": True,
-    # Short, beat-snapped blend. Long crossfades overlap two off-tempo beat
-    # grids (clips play at native BPM) and audibly clash; ~1 beat-bar of
-    # overlap keeps the cut tight, EDMPAPA style.
-    "crossfade_bars": 0.5,
+    # 2-bar blend matching the clips' 2-bar pre-kick lead-in: the incoming
+    # track's vocal/riser build plays over the outgoing tail (which decays
+    # fast), and the kick lands exactly on the outgoing's final downbeat.
+    "crossfade_bars": 2.0,
     "loudness_lufs": -14,
     "use_stem_crossfade": False,
     "use_eq_bass_swap": False,
@@ -456,7 +485,9 @@ def _automix_pipeline(req: schemas.AutomixRequest, progress) -> dict:
         def dl_progress(stage: str, pct: float, msg: str = "") -> None:
             progress("download", min(30.0, pct * 0.30), msg)
 
-        youtube_mod.import_playlist(req.url, IMPORTS_DIR, dl_progress, req.max_tracks)
+        youtube_mod.import_playlist(
+            req.url, IMPORTS_DIR, dl_progress, req.max_tracks, req.video_ids
+        )
 
     # 2. Determine source tracks.
     if req.track_ids:
@@ -544,8 +575,8 @@ def _automix_pipeline(req: schemas.AutomixRequest, progress) -> dict:
     for i, c in enumerate(clips):
         bpm = c.pop("_bpm")
         if i > 0 and c["kick_s"] is not None:
-            breath = 2.0 * 60.0 / bpm if bpm > 0 else 1.0
-            c["start_s"] = max(c["start_s"], c["kick_s"] - breath)
+            breath = 8.0 * 60.0 / bpm if bpm > 0 else 3.5
+            c["start_s"] = max(0.0, c["kick_s"] - breath)
 
     # 5. Render, mapped to 70-100%.
     config = {**AUTOMIX_DEFAULT_CONFIG, **(req.config or {}), "clips": clips}

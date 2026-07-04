@@ -53,14 +53,17 @@ export interface SeekRequest {
 type ActiveTab = "preview" | "mix"
 
 const DEFAULT_CONFIG: Omit<RenderConfig, "clips"> = {
-  target_bpm: 0, // ignored when no_time_stretch is true
-  crossfade_bars: 2, // mix between clips
+  target_bpm: 0, // 0 = auto (mean of the clips' BPMs)
+  crossfade_bars: 2, // 2-bar blend = the clips' 2-bar vocal/riser lead-in
   loudness_lufs: -14,
   use_stem_crossfade: true, // bass-swap when stems are available
   use_eq_bass_swap: true,
   snap_to_downbeat: true,
   hard_cut: false,
-  no_time_stretch: true, // EDM-Papa style: each clip at its native BPM
+  // Beat-match by default: clips stretch (pitch-preserving, ±8% max) to a
+  // common grid so transitions land kick-on-kick — same as one-click
+  // Auto-Mix. Native-BPM playback stays available in settings.
+  no_time_stretch: false,
   brand_overlay: true, // EDMPAPA black bars + logo
   show_titles: true, // per-track title overlay
   harmonic_pitch_shift_max_semitones: 0, // don't pitch-shift either
@@ -123,7 +126,9 @@ function RefreshTitlesButton() {
   )
 }
 
-const SETTINGS_KEY = "automix.settings.v1"
+// v2: beat-matched renders became the default (no_time_stretch: false) —
+// bumping the key drops stale persisted configs that would pin the old mode.
+const SETTINGS_KEY = "automix.settings.v2"
 
 interface StoredSettings {
   config?: Partial<Omit<RenderConfig, "clips">>
@@ -502,7 +507,10 @@ export default function App() {
 
   return (
     <div className="flex h-full flex-col bg-background text-foreground">
-      <header className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-b border-border/60 bg-gradient-to-b from-background to-background/60 px-6 py-3 backdrop-blur">
+      {/* z-40: the Auto-Mix progress dropdown must float above the main
+          content (backdrop-blur makes the header its own stacking context,
+          so children's z-index alone can't escape it). */}
+      <header className="relative z-40 flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-b border-border/60 bg-gradient-to-b from-background to-background/60 px-6 py-3 backdrop-blur">
         <div className="flex shrink-0 items-center gap-3">
           <div className="flex h-8 w-8 items-center justify-center rounded-md bg-primary/15 ring-1 ring-primary/30">
             <Sliders className="h-4 w-4 text-primary" />

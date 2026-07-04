@@ -42,11 +42,11 @@ function clipKey(c: RenderClip): string {
   return `${c.track_id}:${c.start_s.toFixed(3)}:${(c.end_s ?? 0).toFixed(3)}`
 }
 
-/** Crossfade into clip `c`: its pre-kick breath, clamped to sane bounds. */
+/** Crossfade into clip `c`: its pre-kick lead-in (2 bars), clamped sane. */
 function crossfadeFor(c: RenderClip): number {
   const kick = c.kick_s
   if (kick != null && kick > c.start_s) {
-    return Math.min(3.0, Math.max(0.2, kick - c.start_s))
+    return Math.min(5.0, Math.max(0.2, kick - c.start_s))
   }
   return 1.0
 }

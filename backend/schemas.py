@@ -84,12 +84,19 @@ class RenderRequest(BaseModel):
 class YouTubeImportRequest(BaseModel):
     url: str
     max_tracks: int | None = None
+    video_ids: list[str] | None = None  # subset of playlist entries to import
+
+
+class YouTubeEntriesRequest(BaseModel):
+    url: str
+    max_tracks: int | None = None
 
 
 class AutomixRequest(BaseModel):
     url: str | None = None  # optional playlist/video URL to import first
     track_ids: list[str] | None = None  # explicit tracks; default = all in videos/
     max_tracks: int | None = None
+    video_ids: list[str] | None = None  # subset of playlist entries to use
     config: dict = Field(default_factory=dict)  # RenderRequest-style overrides
 
 

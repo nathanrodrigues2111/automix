@@ -130,12 +130,14 @@ def import_playlist(
     dest_dir: Path,
     progress: ProgressCb = None,
     max_tracks: int | None = None,
+    video_ids: list[str] | None = None,
 ) -> list[dict]:
     """Download every entry of a playlist (or a single video) into dest_dir.
 
-    Returns a list of {"path", "title", "video_id"} for downloaded/existing
-    entries. Broken/private entries are skipped and counted in the progress
-    messages.
+    `video_ids` restricts the download to a user-chosen subset of playlist
+    entries. Returns a list of {"path", "title", "video_id"} for
+    downloaded/existing entries. Broken/private entries are skipped and
+    counted in the progress messages.
     """
     import yt_dlp
 
@@ -143,6 +145,11 @@ def import_playlist(
     if progress:
         progress("download", 0.5, "Fetching playlist info")
     entries = _flat_entries(url, max_tracks)
+    if video_ids:
+        wanted = set(video_ids)
+        entries = [e for e in entries if str(e.get("id")) in wanted]
+        if not entries:
+            raise RuntimeError("none of the selected tracks were found in the playlist")
     n = len(entries)
 
     results: list[dict] = []

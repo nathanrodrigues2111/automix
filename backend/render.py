@@ -169,6 +169,17 @@ def _time_stretch_wav(in_wav: Path, out_wav: Path, ratio: float) -> None:
         "-ar", "44100", "-ac", "2", str(out_wav),
     ]
     subprocess.run(cmd, check=True, capture_output=True)
+    # atempo's output drifts by ~15-20ms per clip; seams are sample-math, so
+    # pin the result to the exact expected length (pad/trim at the tail).
+    import soundfile as sf
+    src_info = sf.info(str(in_wav))
+    expected = int(round(src_info.frames * (44100 / src_info.samplerate) * ratio))
+    y, out_sr = sf.read(str(out_wav), always_2d=True)
+    if len(y) > expected:
+        y = y[:expected]
+    elif len(y) < expected:
+        y = np.vstack([y, np.zeros((expected - len(y), y.shape[1]), dtype=y.dtype)])
+    sf.write(str(out_wav), y, out_sr)
 
 
 def _loudnorm_two_pass(in_wav: Path, out_wav: Path, target_lufs: float) -> None:
@@ -219,11 +230,12 @@ def _equal_power_crossfade(a_wav: Path, b_wav: Path, crossfade_s: float, out_wav
         sf.write(str(out_wav), out, sr)
         return
     fade = np.linspace(0, np.pi / 2, n_fade)
-    # Slightly asymmetric blend: the outgoing tail sits ~2 dB under the
-    # incoming head so the next drop's vocal/riser reads clearly through the
-    # transition — a subtle emphasis, not a volume jump.
-    fade_out = (np.cos(fade) * 0.79)[:, None]
-    fade_in = np.sin(fade)[:, None]
+    # Asymmetric blend: the outgoing decays fast (steeper-than-equal-power
+    # curve, ~ -2.5 dB tilt) while the incoming rises early, so the incoming
+    # track's vocal/riser build reads clearly on top of the outgoing tail
+    # instead of fighting it.
+    fade_out = ((np.cos(fade) ** 1.6) * 0.75)[:, None]
+    fade_in = (np.sin(fade) ** 0.85)[:, None]
     tail = a[-n_fade:] * fade_out
     head = b[:n_fade] * fade_in
     mixed = tail + head
@@ -737,7 +749,38 @@ def render_mix(
         src_bpm = float(cached["bpm"])
         downbeats = [float(d) for d in cached.get("downbeats", [])]
 
+        # Prefer the drop's MEASURED kick period over the global BPM estimate
+        # (which can be ~1% off — enough to audibly drift across a blend).
+        clip_kick = clip.get("kick_s")
+        if clip_kick is not None:
+            for d in cached.get("drops") or []:
+                if (
+                    d.get("kick_period_s")
+                    and d.get("kick_s") is not None
+                    and abs(float(d["kick_s"]) - float(clip_kick)) < 0.6
+                ):
+                    bpm_k = 60.0 / float(d["kick_period_s"])
+                    # reconcile octave with the global estimate
+                    while src_bpm > 0 and bpm_k < src_bpm / 1.5:
+                        bpm_k *= 2.0
+                    while src_bpm > 0 and bpm_k > src_bpm * 1.5:
+                        bpm_k /= 2.0
+                    if src_bpm <= 0 or abs(bpm_k - src_bpm) / src_bpm < 0.1:
+                        src_bpm = bpm_k
+                    break
+
         raw_start = float(clip["start_s"])
+        # Transition lead-in: normalize every kick-anchored clip to start
+        # exactly 2 bars before its kick. That lead-in carries the incoming
+        # track's vocal/riser build (a tighter start chops it off — audibly
+        # missing in transitions), and because the crossfade spans the same
+        # 2 bars, the incoming kick still lands exactly on the outgoing
+        # clip's final downbeat.
+        kick = clip.get("kick_s")
+        if kick is not None and src_bpm > 0:
+            breath = 8.0 * 60.0 / src_bpm
+            raw_start = max(0.0, float(kick) - breath)
+            clip["start_s"] = raw_start  # _crossfade_for reads this
         explicit_end = clip.get("end_s")
         # If the caller supplied an explicit end_s (e.g. from a detected drop),
         # honour it exactly: no start-snap, no end-snap, no length math.
@@ -842,6 +885,88 @@ def render_mix(
             return min(buildup, default_crossfade_s)
         return default_crossfade_s
 
+    def _kick_align_crossfade(a_wav: Path, b_wav: Path, planned_cf: float, kb_expected: float) -> float:
+        """Nudge the crossfade length so the incoming clip's first drop kick
+        lands exactly on the outgoing audio's measured kick grid. All the
+        upstream anchors (BPM estimates, kick refinement, seek/stretch
+        rounding) carry small deterministic biases that stack into an audible
+        0.1-0.4 beat stumble; measuring both FINAL wavs with the same method
+        cancels them out."""
+        try:
+            import soundfile as sf
+            from scipy.signal import butter, sosfiltfilt, find_peaks
+
+            def _env(path: Path, t0: float, t1: float):
+                y, esr = sf.read(str(path), always_2d=True)
+                y = y.mean(axis=1)
+                s0, s1 = int(max(0.0, t0) * esr), min(len(y), int(t1 * esr))
+                y = y[s0:s1]
+                sos = butter(4, 150.0, btype="lowpass", fs=esr, output="sos")
+                yl = sosfiltfilt(sos, y)
+                ehop = 512
+                n = len(yl) // ehop
+                env = np.sqrt(np.mean(yl[: n * ehop].reshape(n, ehop) ** 2, axis=1))
+                return env, esr, ehop, max(0.0, t0)
+
+            def _peak_times(env, esr, ehop, off, prom):
+                pk, _ = find_peaks(
+                    env, distance=max(1, int(0.25 * esr / ehop)), prominence=prom
+                )
+                out = []
+                for pi in pk:
+                    i0 = int(pi)
+                    o = 0.0
+                    if 0 < i0 < len(env) - 1:
+                        a_, m_, c_ = env[i0 - 1], env[i0], env[i0 + 1]
+                        den = a_ - 2 * m_ + c_
+                        if abs(den) > 1e-12:
+                            o = float(np.clip(0.5 * (a_ - c_) / den, -0.5, 0.5))
+                    out.append((i0 + o) * ehop / esr + off)
+                return np.asarray(out)
+
+            info = sf.info(str(a_wav))
+            a_len = info.frames / info.samplerate
+            # Search up to 14s back: a drop that dies early leaves no kicks
+            # right at the end, but its steady grid further back still
+            # defines where the next kick belongs.
+            env, esr, ehop, off = _env(a_wav, a_len - 14.0, a_len)
+            times = _peak_times(env, esr, ehop, off, float(np.max(env)) * 0.15)
+            if len(times) < 6:
+                return planned_cf
+            ivs = np.diff(times)
+            period = float(np.median(ivs))
+            if not 0.25 <= period <= 1.0:
+                return planned_cf
+            # anchor on the last kick that sits ON the steady grid (last kick
+            # of a run of near-period intervals)
+            last = float(times[-1])
+            for j in range(len(ivs) - 1, -1, -1):
+                if abs(ivs[j] - period) < 0.12 * period:
+                    last = float(times[j + 1])
+                    break
+            # kick-grid point nearest the outgoing end (k=0: the outgoing's
+            # final kick IS at the end — the incoming kick replaces it)
+            k = max(0, round((a_len - last) / period))
+            t_next = last + k * period
+            envb, esrb, ehopb, offb = _env(b_wav, kb_expected - 1.0, kb_expected + 1.0)
+            tb = _peak_times(envb, esrb, ehopb, offb, float(np.max(envb)) * 0.25)
+            if not len(tb):
+                return planned_cf
+            # Peak NEAREST the expected kick — the lead-in often carries a
+            # riser bass pulse a beat early, which must not win.
+            kb = float(tb[int(np.argmin(np.abs(tb - kb_expected)))])
+            cf = a_len + kb - t_next
+            if cf < 0.2 or abs(cf - planned_cf) > 0.6 * period:
+                print(
+                    f"[align] BAIL cf={cf:.3f} planned={planned_cf:.3f} "
+                    f"period={period:.3f} kb={kb:.3f} t_next={t_next:.3f} a_len={a_len:.3f}"
+                )
+                return planned_cf
+            print(f"[align] cf {planned_cf:.3f} -> {cf:.3f} (Δ {cf-planned_cf:+.3f}s)")
+            return float(cf)
+        except Exception:
+            return planned_cf
+
     # IMPORTANT: stem-aware crossfade functions take *full clean clips* on both
     # sides — they can't accept the running merged audio (which is already
     # mixed-down). So we only use them on the FIRST transition (i==1). For
@@ -855,6 +980,11 @@ def render_mix(
         a_stems = clip_stems[i - 1]
         b_stems = clip_stems[i]
         cf_s = _crossfade_for(clips[i], clip_ratios[i])
+        kick = clips[i].get("kick_s")
+        start = clips[i].get("start_s")
+        if kick is not None and start is not None and float(kick) > float(start):
+            kb_expected = (float(kick) - float(start)) * clip_ratios[i]
+            cf_s = _kick_align_crossfade(current_audio, clip_audios[i], cf_s, kb_expected)
         crossfade_durations.append(cf_s)
         can_use_stems = i == 1 and a_stems and b_stems
         if can_use_stems and use_eq_swap:

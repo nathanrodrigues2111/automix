@@ -71,7 +71,9 @@ export function Player({ src, className, ref, onPlay, ...rest }: PlayerProps) {
   }
 
   const handlePlay: PlayerProps["onPlay"] = (...args) => {
-    claimPlayback(focusId)
+    // A muted player produces no audio, so it must not steal audio focus —
+    // the live-preview monitor plays muted video over Web Audio sound.
+    if (!innerRef.current?.muted) claimPlayback(focusId)
     onPlay?.(...args)
   }
 

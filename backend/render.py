@@ -23,6 +23,7 @@ import youtube as youtube_mod
 BACKEND_DIR = Path(__file__).parent
 PROJECT_ROOT = BACKEND_DIR.parent
 VIDEOS_DIR = PROJECT_ROOT / "videos"
+EXPORTS_DIR = VIDEOS_DIR / "exports"
 RENDER_TMP_DIR = BACKEND_DIR / ".cache" / "renders"
 ASSETS_DIR = PROJECT_ROOT / "assets"
 LOGO_PATH = ASSETS_DIR / "edmpapa11.png"
@@ -887,8 +888,8 @@ def render_mix(
     if progress:
         progress("render", 93.0, "Muxing")
     ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    out_path = VIDEOS_DIR / f"automix_{ts}.mp4"
-    VIDEOS_DIR.mkdir(parents=True, exist_ok=True)
+    out_path = EXPORTS_DIR / f"automix_{ts}.mp4"
+    EXPORTS_DIR.mkdir(parents=True, exist_ok=True)
     if brand_overlay:
         muxed = work / "muxed.mp4"
         _mux_video_audio(concat_video, final_audio, muxed)

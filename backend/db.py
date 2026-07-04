@@ -81,6 +81,24 @@ def put_analysis(file_hash: str, data: dict[str, Any]) -> None:
         )
 
 
+def rekey_file_hash(old: str, new: str) -> None:
+    """Re-point analysis + track-meta rows at a file's new hash. The hash is
+    path-based, so moving a file (e.g. videos/ -> videos/imports/) orphans
+    its rows unless they're re-keyed."""
+    with _DB_LOCK, _conn() as c:
+        c.executescript(_TRACK_META_SQL)
+        c.execute(
+            "UPDATE OR IGNORE analyses SET file_hash = ? WHERE file_hash = ?",
+            (new, old),
+        )
+        c.execute("DELETE FROM analyses WHERE file_hash = ?", (old,))
+        c.execute(
+            "UPDATE OR IGNORE track_meta SET file_hash = ? WHERE file_hash = ?",
+            (new, old),
+        )
+        c.execute("DELETE FROM track_meta WHERE file_hash = ?", (old,))
+
+
 def put_track_meta(
     file_hash: str,
     title: str,

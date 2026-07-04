@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import subprocess
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -33,9 +34,58 @@ app.add_middleware(
 BACKEND_DIR = Path(__file__).parent
 PROJECT_ROOT = BACKEND_DIR.parent
 VIDEOS_DIR = PROJECT_ROOT / "videos"
+IMPORTS_DIR = VIDEOS_DIR / "imports"  # downloaded source tracks
+EXPORTS_DIR = VIDEOS_DIR / "exports"  # rendered automix outputs
 WAVEFORM_CACHE_DIR = BACKEND_DIR / ".cache" / "waveforms"
 
-VIDEOS_DIR.mkdir(parents=True, exist_ok=True)
+IMPORTS_DIR.mkdir(parents=True, exist_ok=True)
+EXPORTS_DIR.mkdir(parents=True, exist_ok=True)
+# One-time migration: files that used to live flat in videos/.
+for _p in VIDEOS_DIR.glob("*.mp4"):
+    _dest = (EXPORTS_DIR if _p.name.startswith("automix_") else IMPORTS_DIR) / _p.name
+    if not _dest.exists():
+        _p.rename(_dest)
+
+
+def _rekey_moved_files() -> None:
+    """The file hash is path-based, so files that migrated from videos/ into
+    imports/ got new hashes — re-point their DB rows (analysis, titles) and
+    rename cached artifacts so nothing has to be re-analyzed. Idempotent."""
+    import hashlib
+
+    previews_dir = BACKEND_DIR / ".cache" / "previews"
+    for p in IMPORTS_DIR.glob("*.mp4"):
+        try:
+            size = p.stat().st_size
+        except FileNotFoundError:
+            continue
+        h = hashlib.sha256()
+        h.update(str((VIDEOS_DIR / p.name).resolve()).encode())
+        h.update(str(size).encode())
+        old = h.hexdigest()
+        new = analysis_mod.file_hash(p)
+        if old == new:
+            continue
+        if db.get_analysis(old) is None and db.get_track_meta(old) is None:
+            continue
+        db.rekey_file_hash(old, new)
+        renames = [
+            (analysis_mod.WAV_CACHE_DIR / f"{old}.wav", analysis_mod.WAV_CACHE_DIR / f"{new}.wav"),
+            (analysis_mod.STEMS_CACHE_DIR / old, analysis_mod.STEMS_CACHE_DIR / new),
+            (WAVEFORM_CACHE_DIR / f"{old}.json", WAVEFORM_CACHE_DIR / f"{new}.json"),
+        ]
+        for src, dst in renames:
+            if src.exists() and not dst.exists():
+                src.rename(dst)
+        if previews_dir.exists():
+            for f in previews_dir.glob(f"{old}_*.wav"):
+                target = previews_dir / f.name.replace(old, new, 1)
+                if not target.exists():
+                    f.rename(target)
+
+
+db.init_db()
+_rekey_moved_files()
 app.mount("/videos", StaticFiles(directory=str(VIDEOS_DIR)), name="videos")
 
 
@@ -102,7 +152,8 @@ def make_progress(job_id: str):
 async def on_startup() -> None:
     db.init_db()
     hub.set_loop(asyncio.get_running_loop())
-    VIDEOS_DIR.mkdir(parents=True, exist_ok=True)
+    IMPORTS_DIR.mkdir(parents=True, exist_ok=True)
+    EXPORTS_DIR.mkdir(parents=True, exist_ok=True)
     WAVEFORM_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
 
@@ -114,12 +165,11 @@ _TRACK_PATH_CACHE: dict[str, Path] = {}
 
 
 def _scan_tracks() -> list[dict]:
-    if not VIDEOS_DIR.exists():
+    if not IMPORTS_DIR.exists():
         return []
     tracks: list[dict] = []
-    for path in sorted(VIDEOS_DIR.rglob("*.mp4")):
-        # Skip our own render outputs — they live in the same dir but are
-        # mixes, not source tracks.
+    for path in sorted(IMPORTS_DIR.rglob("*.mp4")):
+        # Render outputs live in exports/, but skip strays defensively.
         if path.name.startswith("automix_"):
             continue
         try:
@@ -174,7 +224,7 @@ def _resolve_track_path(track_id: str) -> Path:
     cached = _TRACK_PATH_CACHE.get(track_id)
     if cached is not None and cached.exists():
         return cached
-    for path in VIDEOS_DIR.rglob("*.mp4"):
+    for path in IMPORTS_DIR.rglob("*.mp4"):
         tid = analysis_mod.file_hash(path)[:16]
         _TRACK_PATH_CACHE[tid] = path
         if tid == track_id:
@@ -345,7 +395,7 @@ async def post_youtube_import(req: schemas.YouTubeImportRequest) -> dict:
     async def _run():
         try:
             results = await asyncio.to_thread(
-                youtube_mod.import_playlist, req.url, VIDEOS_DIR, progress, req.max_tracks
+                youtube_mod.import_playlist, req.url, IMPORTS_DIR, progress, req.max_tracks
             )
             hub.publish_sync(
                 {
@@ -406,14 +456,14 @@ def _automix_pipeline(req: schemas.AutomixRequest, progress) -> dict:
         def dl_progress(stage: str, pct: float, msg: str = "") -> None:
             progress("download", min(30.0, pct * 0.30), msg)
 
-        youtube_mod.import_playlist(req.url, VIDEOS_DIR, dl_progress, req.max_tracks)
+        youtube_mod.import_playlist(req.url, IMPORTS_DIR, dl_progress, req.max_tracks)
 
     # 2. Determine source tracks.
     if req.track_ids:
         paths = [_resolve_track_path(tid) for tid in req.track_ids]
     else:
         paths = [
-            p for p in sorted(VIDEOS_DIR.rglob("*.mp4"))
+            p for p in sorted(IMPORTS_DIR.rglob("*.mp4"))
             if not p.name.startswith("automix_")
         ]
     if not paths:
@@ -570,12 +620,12 @@ async def list_mixes() -> list[dict]:
 
     def _run() -> list[dict]:
         out = []
-        for p in sorted(VIDEOS_DIR.glob("automix_*.mp4"), key=lambda x: x.stat().st_mtime, reverse=True):
+        for p in sorted(EXPORTS_DIR.glob("automix_*.mp4"), key=lambda x: x.stat().st_mtime, reverse=True):
             st = p.stat()
             out.append(
                 {
                     "filename": p.name,
-                    "path": f"videos/{p.name}",
+                    "path": f"videos/exports/{p.name}",
                     "size_bytes": st.st_size,
                     "created_at": datetime.fromtimestamp(st.st_mtime, tz=timezone.utc).isoformat(),
                 }
@@ -591,7 +641,7 @@ def _safe_video_file(filename: str, prefix: str | None = None) -> Path:
         raise HTTPException(status_code=400, detail="invalid filename")
     if prefix and not name.startswith(prefix):
         raise HTTPException(status_code=400, detail="not a rendered mix")
-    p = VIDEOS_DIR / name
+    p = EXPORTS_DIR / name
     if not p.exists():
         raise HTTPException(status_code=404, detail="file not found")
     return p
@@ -612,6 +662,43 @@ async def delete_track(track_id: str) -> dict:
     await asyncio.to_thread(path.unlink)
     _TRACK_PATH_CACHE.pop(track_id, None)
     return {"deleted": path.name}
+
+
+PREVIEW_CACHE_DIR = Path(__file__).parent / ".cache" / "previews"
+
+
+@app.get("/api/tracks/{track_id}/clip")
+async def get_track_clip(track_id: str, start: float, end: float):
+    """A clip's audio segment as WAV — feeds the browser's live mix preview.
+    Cut from the cached analysis WAV when available (instant), else the
+    source video. Cached on disk per (track, start, end)."""
+    path = _resolve_track_path(track_id)
+    start = max(0.0, float(start))
+    dur = min(120.0, float(end) - start)
+    if dur <= 0:
+        raise HTTPException(status_code=400, detail="end must be after start")
+
+    fh = analysis_mod.file_hash(path)
+    out = PREVIEW_CACHE_DIR / f"{fh}_{start:.2f}_{dur:.2f}.wav"
+
+    def _run() -> Path:
+        if out.exists():
+            return out
+        PREVIEW_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        wav = analysis_mod.WAV_CACHE_DIR / f"{fh}.wav"
+        src = wav if wav.exists() else path
+        tmp = out.with_suffix(".tmp.wav")
+        cmd = [
+            "ffmpeg", "-y", "-ss", f"{start:.3f}", "-t", f"{dur:.3f}",
+            "-i", str(src), "-vn", "-ac", "2", "-ar", "44100",
+            "-acodec", "pcm_s16le", str(tmp),
+        ]
+        subprocess.run(cmd, check=True, capture_output=True)
+        tmp.rename(out)
+        return out
+
+    p = await asyncio.to_thread(_run)
+    return FileResponse(p, media_type="audio/wav")
 
 
 @app.patch("/api/tracks/{track_id}")
@@ -644,7 +731,7 @@ async def refresh_titles() -> dict:
 
     def _run() -> dict:
         updated: list[dict] = []
-        for path in sorted(VIDEOS_DIR.rglob("*.mp4")):
+        for path in sorted(IMPORTS_DIR.rglob("*.mp4")):
             if path.name.startswith("automix_"):
                 continue
             fh = analysis_mod.file_hash(path)

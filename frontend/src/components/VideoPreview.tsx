@@ -26,6 +26,10 @@ interface VideoPreviewProps {
   onPlayingChange?: (playing: boolean) => void
   /** Exposes the underlying player instance (for external transport controls). */
   onPlayerRef?: (player: MediaPlayerInstance | null) => void
+  /** EDMPAPA brand overlay (live mix preview): bottom logo bar, plus the
+   *  track title in Bebas while `showTitle` is true — mirrors the geometry
+   *  the renderer burns into the final video. */
+  brandOverlay?: { title: string | null; showTitle: boolean } | null
   /** When true (default), drop previews loop back to the drop start on
    *  reaching the drop end instead of pausing. */
   loop?: boolean
@@ -53,6 +57,7 @@ export function VideoPreview({
   onTimeUpdate,
   onPlayingChange,
   onPlayerRef,
+  brandOverlay,
   loop = true,
 }: VideoPreviewProps) {
   const playerRef = useRef<MediaPlayerInstance>(null)
@@ -108,6 +113,7 @@ export function VideoPreview({
   if (!track) return null
 
   return (
+    <div className="relative" style={{ containerType: "inline-size" }}>
     <Player
       ref={(node) => {
         playerRef.current = node
@@ -141,5 +147,34 @@ export function VideoPreview({
         onTimeUpdate?.(currentTime)
       }}
     />
+    {brandOverlay && (
+      <div className="pointer-events-none absolute inset-0 z-10 overflow-hidden rounded-lg">
+        {/* edmpapa11.png is a full-frame 1920x1080 overlay (opaque bars
+            top/bottom, wordmark baked in, transparent middle) — the render
+            composites it 1:1, so the preview just stretches it over the
+            player for pixel-true branding. */}
+        <img
+          src="/edmpapa.png"
+          alt="EDMPAPA"
+          className="absolute inset-0 h-full w-full"
+        />
+        {brandOverlay.showTitle && brandOverlay.title && (
+          /* Title centered in the bottom bar (140px on the 1080p canvas),
+             font 56/1080 — same as the burned-in ASS title. */
+          <div
+            className="absolute inset-x-0 bottom-0 flex items-center justify-center px-[6cqw]"
+            style={{ height: "7.3cqw" }}
+          >
+            <span
+              className="truncate uppercase leading-none text-white"
+              style={{ fontFamily: "'Bebas', sans-serif", fontSize: "2.92cqw" }}
+            >
+              {brandOverlay.title}
+            </span>
+          </div>
+        )}
+      </div>
+    )}
+    </div>
   )
 }

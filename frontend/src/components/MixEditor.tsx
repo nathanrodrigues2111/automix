@@ -1,4 +1,4 @@
-import { useMemo } from "react"
+import { useEffect, useMemo, useRef } from "react"
 import {
   DndContext,
   KeyboardSensor,
@@ -19,9 +19,12 @@ import { CSS } from "@dnd-kit/utilities"
 import {
   ChevronDown,
   ChevronUp,
-  Eye,
   GripVertical,
   Layers,
+  Loader2,
+  Pause,
+  Play,
+  Square,
   Trash2,
   Wand2,
 } from "lucide-react"
@@ -29,9 +32,12 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Label } from "@/components/ui/label"
 import { Badge } from "@/components/ui/badge"
+import { Progress } from "@/components/ui/progress"
 import type { RenderClip, Track } from "@/api/types"
+import type { LivePreview } from "@/hooks/useLivePreview"
 import { autoOrderTracks } from "@/lib/camelot"
 import { displayTitle, formatDuration } from "@/lib/format"
+import { cn } from "@/lib/utils"
 import { KeyChip } from "@/components/KeyChip"
 
 export interface EditorClip extends RenderClip {
@@ -42,7 +48,9 @@ interface MixEditorProps {
   tracks: Track[]
   clips: EditorClip[]
   setClips: (clips: EditorClip[]) => void
-  onPreview: () => void
+  /** Live mix preview transport — owned by App so it can drive the main
+   *  video player as the program monitor. */
+  preview: LivePreview
   onRender: () => void
   onSaveProject: () => void
   onLoadProject: () => void
@@ -52,7 +60,7 @@ export function MixEditor({
   tracks,
   clips,
   setClips,
-  onPreview,
+  preview,
   onRender,
   onSaveProject,
   onLoadProject,
@@ -139,11 +147,18 @@ export function MixEditor({
           <Button
             variant="secondary"
             size="sm"
-            onClick={onPreview}
-            disabled={clips.length === 0}
-            title="Low-quality 720p proxy render (~30s)"
+            onClick={preview.toggle}
+            disabled={clips.length === 0 || preview.state.status === "loading"}
+            title="Instant in-browser audio preview — clips at native BPM with the real transition timing"
           >
-            <Eye className="h-3.5 w-3.5" /> Preview
+            {preview.state.status === "loading" ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : preview.state.status === "playing" ? (
+              <Pause className="h-3.5 w-3.5 fill-current" />
+            ) : (
+              <Play className="h-3.5 w-3.5 fill-current" />
+            )}
+            Preview
           </Button>
           <Button
             size="sm"
@@ -154,6 +169,32 @@ export function MixEditor({
             Render
           </Button>
         </div>
+
+        {preview.state.status !== "idle" && (
+          <div className="flex items-center gap-2">
+            <Progress
+              value={
+                preview.state.duration > 0
+                  ? (preview.state.position / preview.state.duration) * 100
+                  : 0
+              }
+              className="h-1 flex-1"
+            />
+            <span className="shrink-0 font-mono text-[10px] tabular-nums text-muted-foreground">
+              {formatDuration(preview.state.position)} /{" "}
+              {formatDuration(preview.state.duration)}
+            </span>
+            <button
+              type="button"
+              onClick={preview.stop}
+              aria-label="Stop preview"
+              title="Stop preview"
+              className="flex h-5 w-5 shrink-0 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring"
+            >
+              <Square className="h-3 w-3 fill-current" />
+            </button>
+          </div>
+        )}
       </CardHeader>
 
       <CardContent className="min-w-0 flex-1 space-y-4 overflow-y-auto overflow-x-hidden">
@@ -201,6 +242,10 @@ export function MixEditor({
                       clip={clip}
                       track={track}
                       index={idx}
+                      isActive={
+                        preview.state.status !== "idle" &&
+                        preview.state.activeIndex === idx
+                      }
                       onRemove={() => removeClip(clip.uid)}
                       onUpdate={(patch) => updateClip(clip.uid, patch)}
                       onMoveUp={() => moveClip(clip.uid, -1)}
@@ -221,6 +266,8 @@ interface SortableClipProps {
   clip: EditorClip
   track: Track | undefined
   index: number
+  /** True while this clip is audible in the live preview. */
+  isActive?: boolean
   onRemove: () => void
   onUpdate: (patch: Partial<RenderClip>) => void
   onMoveUp: () => void
@@ -231,6 +278,7 @@ function SortableClip({
   clip,
   track,
   index,
+  isActive = false,
   onRemove,
   onUpdate,
   onMoveUp,
@@ -268,7 +316,10 @@ function SortableClip({
     <li
       ref={setNodeRef}
       style={style}
-      className="flex min-w-0 items-stretch gap-2 overflow-hidden rounded-lg border border-border/60 bg-card p-2.5 transition-colors hover:border-border"
+      className={cn(
+        "flex min-w-0 items-stretch gap-2 overflow-hidden rounded-lg border border-border/60 bg-card p-2.5 transition-colors hover:border-border",
+        isActive && "border-primary/50 bg-primary/10 ring-1 ring-primary/30",
+      )}
     >
       <button
         className="flex shrink-0 cursor-grab touch-none items-center rounded px-1 text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring"

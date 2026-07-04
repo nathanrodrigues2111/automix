@@ -31,6 +31,7 @@ import { RenderDialog } from "@/components/RenderDialog"
 import { SettingsDialog } from "@/components/SettingsDialog"
 import { useRefreshTitles, useTracks } from "@/api/client"
 import type { Drop, Project, RenderConfig, Track } from "@/api/types"
+import { useLivePreview } from "@/hooks/useLivePreview"
 import { useProgressSocket } from "@/hooks/useProgressSocket"
 import { toggleActivePlayback } from "@/lib/audioFocus"
 import { displayTitle, formatDuration } from "@/lib/format"
@@ -279,6 +280,61 @@ export default function App() {
     if (p.paused) void p.play()?.catch?.(() => {})
     else p.pause()
   }
+
+  // ---- Live mix preview: Web Audio is the master clock; the main video
+  // player doubles as the program monitor (muted, video-synced). ----
+  const livePreview = useLivePreview(clips)
+  const clipsRef = useRef(clips)
+  clipsRef.current = clips
+  const monitorTrackIdRef = useRef<string | null>(null)
+  monitorTrackIdRef.current = selectedTrackId
+
+  useEffect(() => {
+    const status = livePreview.state.status
+    const p = previewPlayerRef.current
+    if (status === "idle") {
+      if (p) {
+        p.muted = false
+        if (!p.paused) p.pause()
+      }
+      return
+    }
+    // The monitor owns the player now — clear pending drop-preview windows.
+    setPlayRequest(null)
+    let raf = 0
+    const tick = () => {
+      raf = requestAnimationFrame(tick)
+      const ph = livePreview.getPlayhead()
+      const clip = ph ? clipsRef.current[ph.index] : undefined
+      if (!ph || !clip) return
+      // Follow the active clip's track (switches the player's source).
+      if (monitorTrackIdRef.current !== clip.track_id) {
+        setSelectedTrackId(clip.track_id)
+        return // wait for the new source to mount
+      }
+      const player = previewPlayerRef.current
+      if (!player) return
+      player.muted = true // sound comes from the Web Audio graph
+      const target = clip.start_s + ph.offset
+      const videoEl = player.el?.querySelector("video")
+      const cur = videoEl ? videoEl.currentTime : player.currentTime
+      if (Math.abs(cur - target) > 0.35) player.currentTime = target
+      const playing = livePreview.state.status === "playing"
+      if (playing && player.paused && player.state.canPlay)
+        void player.play()?.catch?.(() => {})
+      else if (!playing && !player.paused) player.pause()
+    }
+    raf = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(raf)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [livePreview.state.status])
+
+  // Brand overlay for the monitor: recomputed as the preview position ticks
+  // (~10 Hz). Like the burned-in render titles, the active clip's title stays
+  // up for the whole clip and switches at the transition.
+  const monitorPlayhead =
+    livePreview.state.status !== "idle" ? livePreview.getPlayhead() : null
+  const monitorClip = monitorPlayhead ? clips[monitorPlayhead.index] : null
 
   const trackById = useMemo(
     () => Object.fromEntries((tracks.data ?? []).map((t) => [t.id, t])),
@@ -599,6 +655,16 @@ export default function App() {
                   onPlayerRef={(p) => {
                     previewPlayerRef.current = p
                   }}
+                  brandOverlay={
+                    monitorClip
+                      ? {
+                          title: trackById[monitorClip.track_id]
+                            ? displayTitle(trackById[monitorClip.track_id])
+                            : null,
+                          showTitle: true,
+                        }
+                      : null
+                  }
                   loop={loopPreviews}
                 />
               ) : (
@@ -710,7 +776,7 @@ export default function App() {
             tracks={tracks.data ?? []}
             clips={clips}
             setClips={setClips}
-            onPreview={() => setRenderMode("preview")}
+            preview={livePreview}
             onRender={() => setRenderMode("full")}
             onSaveProject={() => setProjectDialog("save")}
             onLoadProject={() => setProjectDialog("load")}

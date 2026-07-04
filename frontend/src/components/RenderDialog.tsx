@@ -28,7 +28,7 @@ import {
 } from "@/components/ui/dialog"
 import { Progress } from "@/components/ui/progress"
 import { Player } from "@/components/Player"
-import { useCancelJob, useRender, mediaUrl } from "@/api/client"
+import { useCancelJob, useRender, useRevealFile, mediaUrl } from "@/api/client"
 import type { RenderConfig } from "@/api/types"
 import type { ProgressMap } from "@/hooks/useProgressSocket"
 

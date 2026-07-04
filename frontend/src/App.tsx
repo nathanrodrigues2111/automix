@@ -502,8 +502,8 @@ export default function App() {
 
   return (
     <div className="flex h-full flex-col bg-background text-foreground">
-      <header className="flex items-center justify-between border-b border-border/60 bg-gradient-to-b from-background to-background/60 px-6 py-3 backdrop-blur">
-        <div className="flex items-center gap-3">
+      <header className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-b border-border/60 bg-gradient-to-b from-background to-background/60 px-6 py-3 backdrop-blur">
+        <div className="flex shrink-0 items-center gap-3">
           <div className="flex h-8 w-8 items-center justify-center rounded-md bg-primary/15 ring-1 ring-primary/30">
             <Sliders className="h-4 w-4 text-primary" />
           </div>
@@ -511,12 +511,15 @@ export default function App() {
             <h1 className="bg-gradient-to-r from-foreground to-primary bg-clip-text text-lg font-semibold tracking-tight text-transparent">
               Automix
             </h1>
-            <span className="text-xs uppercase tracking-wider text-muted-foreground">
+            <span className="hidden text-xs uppercase tracking-wider text-muted-foreground xl:inline">
               EDM drop stitcher
             </span>
           </div>
         </div>
-        <div className="flex items-center gap-1.5">
+        <div className="order-last w-full min-w-0 basis-full lg:order-none lg:w-auto lg:max-w-3xl lg:flex-1 lg:basis-auto">
+          <AutomixPanel progress={progress} variant="header" />
+        </div>
+        <div className="flex shrink-0 items-center gap-1.5">
           <span
             className="mr-1.5 flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wider text-muted-foreground"
             title="Everything runs on this machine"
@@ -617,7 +620,6 @@ export default function App() {
             activeTab === "preview" ? "flex flex-1" : "hidden",
           )}
         >
-          <AutomixPanel progress={progress} />
 
           <Card className="overflow-hidden border-border/60 bg-card/40 backdrop-blur">
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">

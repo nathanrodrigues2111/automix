@@ -11,6 +11,7 @@ import {
   Loader2,
   RotateCcw,
   Wand2,
+  X,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
@@ -42,9 +43,13 @@ function isYoutubeUrl(url: string): boolean {
 
 interface AutomixPanelProps {
   progress: ProgressMap
+  /** "card" renders the standalone panel; "header" renders a compact form
+   *  row whose status (progress, log, result) floats in a dropdown below. */
+  variant?: "card" | "header"
 }
 
-export function AutomixPanel({ progress }: AutomixPanelProps) {
+export function AutomixPanel({ progress, variant = "card" }: AutomixPanelProps) {
+  const compact = variant === "header"
   const qc = useQueryClient()
   const automix = useAutomix()
   const youtubeImport = useYoutubeImport()
@@ -53,6 +58,7 @@ export function AutomixPanel({ progress }: AutomixPanelProps) {
   const [maxTracks, setMaxTracks] = useState("")
   const [urlError, setUrlError] = useState<string | null>(null)
   const [job, setJob] = useState<{ id: string; kind: JobKind } | null>(null)
+  const [panelHidden, setPanelHidden] = useState(false)
   const [log, setLog] = useState<LogLine[]>([])
   const [showLog, setShowLog] = useState(true)
   const logRef = useRef<HTMLDivElement>(null)
@@ -71,6 +77,7 @@ export function AutomixPanel({ progress }: AutomixPanelProps) {
   // only keeps the latest message per job). Cleared when a new job starts.
   useEffect(() => {
     setLog([])
+    setPanelHidden(false)
   }, [job?.id])
 
   useEffect(() => {
@@ -169,28 +176,12 @@ export function AutomixPanel({ progress }: AutomixPanelProps) {
     job?.kind === "import" ? STAGES.slice(0, 1) : STAGES
   const stageIdx = p ? STAGES.findIndex((s) => s.key === p.stage) : -1
 
-  return (
-    <Card className="relative overflow-hidden border-primary/25 bg-gradient-to-br from-primary/10 via-card/50 to-fuchsia-500/10 backdrop-blur">
-      <div
-        aria-hidden
-        className="pointer-events-none absolute -top-16 right-0 h-40 w-72 rounded-full bg-primary/15 blur-3xl"
-      />
-      <CardContent className="relative space-y-3 p-4">
-        <div className="flex items-center gap-3">
-          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary/15 ring-1 ring-primary/30">
-            <Wand2 className="h-4 w-4 text-primary" />
-          </div>
-          <div className="min-w-0">
-            <h2 className="text-sm font-semibold tracking-tight">Auto-Mix</h2>
-            <p className="truncate text-xs text-muted-foreground">
-              Paste a YouTube playlist — download, analyze &amp; render a
-              seamless drop mix in one click
-            </p>
-          </div>
-        </div>
-
+  const formEl = (
         <form
-          className="flex flex-col gap-2 sm:flex-row"
+          className={cn(
+            "flex gap-2",
+            compact ? "min-w-0 flex-1 flex-row items-center" : "flex-col sm:flex-row",
+          )}
           onSubmit={(e) => {
             e.preventDefault()
             startAutomix()
@@ -210,6 +201,7 @@ export function AutomixPanel({ progress }: AutomixPanelProps) {
             disabled={running}
             className={cn(
               "min-w-0 flex-1 bg-background/60",
+              compact && "h-8 text-sm",
               urlError && "border-destructive focus-visible:ring-destructive/40",
             )}
           />
@@ -224,12 +216,19 @@ export function AutomixPanel({ progress }: AutomixPanelProps) {
               aria-label="Max tracks"
               title="Max tracks to pull from the playlist (empty = all)"
               disabled={running}
-              className="w-20 bg-background/60 tabular-nums"
+              className={cn(
+                "w-20 bg-background/60 tabular-nums",
+                compact && "h-8 w-16 text-sm",
+              )}
             />
             <Button
               type="submit"
               disabled={running}
-              className="shrink-0 bg-gradient-to-r from-primary to-fuchsia-500 text-primary-foreground shadow-[0_0_18px_-4px_color-mix(in_oklch,var(--primary)_60%,transparent)] hover:from-primary hover:to-fuchsia-400"
+              size={compact ? "sm" : "default"}
+              className={cn(
+                "shrink-0 bg-gradient-to-r from-primary to-fuchsia-500 text-primary-foreground shadow-[0_0_18px_-4px_color-mix(in_oklch,var(--primary)_60%,transparent)] hover:from-primary hover:to-fuchsia-400",
+                compact && "h-8",
+              )}
             >
               {running && job?.kind !== "import" ? (
                 <Loader2 className="h-4 w-4 animate-spin" />
@@ -245,7 +244,10 @@ export function AutomixPanel({ progress }: AutomixPanelProps) {
               disabled={running}
               onClick={startImport}
               title="Download tracks into the library without rendering, so you can hand-tune the mix"
-              className="h-9 shrink-0 bg-background/40 text-xs"
+              className={cn(
+                "shrink-0 bg-background/40 text-xs",
+                compact ? "h-8" : "h-9",
+              )}
             >
               {running && job?.kind === "import" ? (
                 <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -256,7 +258,10 @@ export function AutomixPanel({ progress }: AutomixPanelProps) {
             </Button>
           </div>
         </form>
+  )
 
+  const statusEl = (
+    <>
         {urlError && (
           <p role="alert" className="flex items-center gap-1.5 text-xs text-destructive">
             <AlertCircle className="h-3.5 w-3.5 shrink-0" /> {urlError}
@@ -453,6 +458,53 @@ export function AutomixPanel({ progress }: AutomixPanelProps) {
             </div>
           </div>
         )}
+    </>
+  )
+
+  if (compact) {
+    const hasStatus = !!urlError || !!job
+    return (
+      <div className="relative min-w-0 flex-1">
+        {formEl}
+        {hasStatus && !panelHidden && (
+          <div className="absolute inset-x-0 top-full z-50 mt-2 space-y-3 rounded-xl border border-border/60 bg-popover/95 p-3 pt-8 shadow-2xl backdrop-blur">
+            <button
+              type="button"
+              onClick={() => setPanelHidden(true)}
+              aria-label="Hide progress panel"
+              title="Hide (the job keeps running)"
+              className="absolute right-2 top-2 flex h-5 w-5 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+            {statusEl}
+          </div>
+        )}
+      </div>
+    )
+  }
+
+  return (
+    <Card className="relative overflow-hidden border-primary/25 bg-gradient-to-br from-primary/10 via-card/50 to-fuchsia-500/10 backdrop-blur">
+      <div
+        aria-hidden
+        className="pointer-events-none absolute -top-16 right-0 h-40 w-72 rounded-full bg-primary/15 blur-3xl"
+      />
+      <CardContent className="relative space-y-3 p-4">
+        <div className="flex items-center gap-3">
+          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary/15 ring-1 ring-primary/30">
+            <Wand2 className="h-4 w-4 text-primary" />
+          </div>
+          <div className="min-w-0">
+            <h2 className="text-sm font-semibold tracking-tight">Auto-Mix</h2>
+            <p className="truncate text-xs text-muted-foreground">
+              Paste a YouTube playlist — download, analyze &amp; render a
+              seamless drop mix in one click
+            </p>
+          </div>
+        </div>
+        {formEl}
+        {statusEl}
       </CardContent>
     </Card>
   )

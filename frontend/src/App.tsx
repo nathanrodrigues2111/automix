@@ -856,6 +856,8 @@ export default function App() {
               )}
             </CardContent>
           </Card>
+
+          <MixesPanel progress={progress} />
         </section>
 
         <div

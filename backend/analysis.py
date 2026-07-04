@@ -682,7 +682,10 @@ def apply_cues(
     for d in drops:
         ci = d.pop("_cue_i", None)
         if ci is None:
-            out.append(d)
+            # A timestamped tracklist is authoritative: drops outside every
+            # segment (e.g. before the first cue) are noise, not songs.
+            if not timed:
+                out.append(d)
             continue
         cur = best.get(ci)
         if cur is None or float(d.get("score", 0)) > float(cur.get("score", 0)):

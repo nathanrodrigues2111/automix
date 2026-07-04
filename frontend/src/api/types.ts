@@ -9,6 +9,8 @@ export interface Drop {
   end_s: number
   kick_s?: number
   score: number
+  /** From a set's tracklist cues. */
+  title?: string | null
 }
 
 export interface TrackAnalysis {
@@ -60,6 +62,8 @@ export interface RenderClip {
   length_bars: number
   end_s?: number | null
   kick_s?: number | null
+  /** Overrides the source track's display title (set cues). */
+  title?: string | null
 }
 
 export interface RenderConfig {

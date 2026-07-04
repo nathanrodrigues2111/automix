@@ -15,6 +15,7 @@ class Drop(BaseModel):
     end_s: float
     kick_s: float | None = None  # time of the actual drop kick (used to align crossfades)
     score: float = 0.0
+    title: str | None = None  # from a set's tracklist cues
 
 
 class Analysis(BaseModel):
@@ -63,6 +64,7 @@ class RenderClip(BaseModel):
     # Drop kick time in source coordinates — used to compute the buildup length
     # so the incoming clip's drop hits exactly when the outgoing clip's drop ends.
     kick_s: float | None = None
+    title: str | None = None  # overrides the source track's display title
 
 
 class RenderRequest(BaseModel):

@@ -229,6 +229,8 @@ def _scan_tracks() -> list[dict]:
                     )
                     cached["drops"] = drops
                     cached["drops_version"] = analysis_mod.DROPS_VERSION
+                    if cached.get("cues"):
+                        analysis_mod.label_drops_with_cues(drops, cached["cues"])
                     db.put_analysis(fh, cached)
                 except Exception:
                     cached["drops"] = []
@@ -280,6 +282,10 @@ async def post_analyze(req: schemas.AnalyzeRequest) -> dict:
             progress("analysis", 1.0, "Starting analysis")
             result = await asyncio.to_thread(analysis_mod.analyze_track, track_path, progress)
             fh = analysis_mod.file_hash(track_path)
+            prior = db.get_analysis(fh)
+            if prior and prior.get("cues"):
+                result["cues"] = prior["cues"]
+                analysis_mod.label_drops_with_cues(result.get("drops") or [], prior["cues"])
             db.put_analysis(fh, result)
             progress("analysis", 100.0, "Analysis complete")
         except Exception as e:
@@ -864,6 +870,35 @@ async def get_track_clip(track_id: str, start: float, end: float):
 
     p = await asyncio.to_thread(_run)
     return FileResponse(p, media_type="audio/wav")
+
+
+class TracklistRequest(schemas.BaseModel):
+    text: str
+
+
+@app.post("/api/tracks/{track_id}/cues")
+async def post_track_cues(track_id: str, req: TracklistRequest) -> dict:
+    """Attach a pasted tracklist (timestamped or not) to a track and label
+    its detected drops with the cue titles."""
+    path = _resolve_track_path(track_id)
+    fh = analysis_mod.file_hash(path)
+
+    def _run() -> dict:
+        cues = analysis_mod.parse_tracklist(req.text)
+        if not cues:
+            raise ValueError("no tracklist lines recognized")
+        cached = db.get_analysis(fh)
+        if cached is None:
+            raise ValueError("analyze the track first")
+        labeled = analysis_mod.label_drops_with_cues(cached.get("drops") or [], cues)
+        cached["cues"] = cues
+        db.put_analysis(fh, cached)
+        return {"cues": len(cues), "labeled": labeled}
+
+    try:
+        return await asyncio.to_thread(_run)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 @app.patch("/api/tracks/{track_id}")

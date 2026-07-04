@@ -510,6 +510,7 @@ export default function App() {
     setClips((prev) => [
       ...prev,
       {
+        title: drop?.title ?? null,
         uid: uid(),
         track_id: t.id,
         start_s,
@@ -738,9 +739,11 @@ export default function App() {
                   brandOverlay={
                     monitorClip
                       ? {
-                          title: trackById[monitorClip.track_id]
-                            ? displayTitle(trackById[monitorClip.track_id])
-                            : null,
+                          title:
+                            monitorClip.title ??
+                            (trackById[monitorClip.track_id]
+                              ? displayTitle(trackById[monitorClip.track_id])
+                              : null),
                           showTitle: !monitorIntro && !monitorOutro,
                           intro: monitorIntro,
                           outro: monitorOutro,

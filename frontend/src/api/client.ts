@@ -132,6 +132,20 @@ export function useRenameTrack() {
   })
 }
 
+export function useSetCues() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ trackId, text }: { trackId: string; text: string }) =>
+      http<{ cues: number; labeled: number }>(`/api/tracks/${trackId}/cues`, {
+        method: "POST",
+        body: JSON.stringify({ text }),
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["tracks"] })
+    },
+  })
+}
+
 export function useRefreshTitles() {
   const qc = useQueryClient()
   return useMutation({

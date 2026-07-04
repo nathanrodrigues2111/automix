@@ -1230,7 +1230,10 @@ def render_mix(
         windows: list[tuple[str, float, float]] = []
         if show_titles:
             import soundfile as sf
-            titles = [_display_title(src) for src in srcs]
+            titles = [
+                (clips[i].get("title") or _display_title(srcs[i]))
+                for i in range(len(srcs))
+            ]
             # Audio lengths, not video probes: the title switch must land
             # exactly on each incoming drop's kick in the mixed audio.
             durations = [

@@ -160,7 +160,7 @@ def find_drops(
     wav_path: Path,
     downbeats: list[float],
     bpm: float,
-    max_drops: int = 5,
+    max_drops: int | None = None,
     min_separation_s: float = 30.0,
 ) -> list[dict[str, Any]]:
     """Detect EDM drop *moments* — the points where energy jumps from a
@@ -183,6 +183,11 @@ def find_drops(
     duration = len(y) / sr
     if y.size == 0:
         return []
+
+    # Full DJ sets need one drop per track, not a handful for the whole
+    # hour: scale the cap with duration (a normal single stays at 5).
+    if max_drops is None:
+        max_drops = min(60, max(5, int(duration / 45.0)))
 
     hop = 512
     rms = librosa.feature.rms(y=y, hop_length=hop)[0]
@@ -484,6 +489,71 @@ def find_drops(
     drops = drops[:max_drops]
     drops.sort(key=lambda d: d["start_s"])
     return drops
+
+
+# ---------- Tracklist cues (full DJ sets) ----------
+
+_CUE_RE = re.compile(
+    r"^\s*(?:(\d{1,2}):)?(\d{1,2}):(\d{2})\s*-?\s*(.+?)\s*$"
+)
+
+
+def parse_tracklist(text: str) -> list[dict[str, Any]]:
+    """Parse a pasted tracklist into cues.
+
+    Lines like "1:37 - Artist - Title" (H:MM:SS or M:SS, hyphen optional)
+    become {"t_s": float, "title": str}. Lines without a leading timestamp
+    become {"t_s": None, "title": str} so an untimestamped list can still
+    label detected drops in order.
+    """
+    cues: list[dict[str, Any]] = []
+    for raw in text.splitlines():
+        line = raw.strip().lstrip("-•*").strip()
+        if not line:
+            continue
+        m = _CUE_RE.match(line)
+        if m and m.group(2) is not None:
+            h = int(m.group(1)) if m.group(1) else 0
+            t = h * 3600 + int(m.group(2)) * 60 + int(m.group(3))
+            title = m.group(4).strip(" -\t")
+            if title:
+                cues.append({"t_s": float(t), "title": title})
+        else:
+            cues.append({"t_s": None, "title": line})
+    timed = [c for c in cues if c["t_s"] is not None]
+    if timed:
+        timed.sort(key=lambda c: c["t_s"])
+        return timed
+    return cues
+
+
+def label_drops_with_cues(
+    drops: list[dict[str, Any]], cues: list[dict[str, Any]]
+) -> int:
+    """Attach cue titles to drops. Timestamped cues map by position (a drop
+    belongs to the cue segment its kick falls in); an untimestamped list
+    labels drops in order. Returns how many drops got a title."""
+    if not drops or not cues:
+        return 0
+    labeled = 0
+    timed = [c for c in cues if c.get("t_s") is not None]
+    if timed:
+        for d in drops:
+            kick = float(d.get("kick_s") or d.get("start_s") or 0.0)
+            current = None
+            for c in timed:
+                if float(c["t_s"]) <= kick + 1.0:
+                    current = c
+                else:
+                    break
+            if current:
+                d["title"] = current["title"]
+                labeled += 1
+    else:
+        for d, c in zip(drops, cues):
+            d["title"] = c["title"]
+            labeled += 1
+    return labeled
 
 
 def _run_allin1(wav_path: Path, progress: ProgressCb = None) -> dict[str, Any]:

@@ -4,6 +4,7 @@ import {
   Copy,
   Globe,
   Loader2,
+  ListMusic,
   Search,
   Music,
   Pause,
@@ -29,6 +30,7 @@ import { Progress } from "@/components/ui/progress"
 import {
   useAnalyze,
   useAnalyzeAll,
+  useSetCues,
   useCancelJob,
   useDeleteTrack,
   useRefreshTitles,
@@ -181,6 +183,26 @@ export function TrackList({
       },
       onError: (e) => toast.error(`Fetch failed: ${e.message}`),
     })
+  }
+
+  // Tracklist cues (full DJ sets): paste "0:00 - Artist - Title" lines.
+  const setCues = useSetCues()
+  const [cuesTrack, setCuesTrack] = useState<Track | null>(null)
+  const [cuesText, setCuesText] = useState("")
+
+  const saveCues = () => {
+    if (!cuesTrack || !cuesText.trim()) return
+    setCues.mutate(
+      { trackId: cuesTrack.id, text: cuesText },
+      {
+        onSuccess: (res) => {
+          toast.success(`${res.cues} cues saved, ${res.labeled} drops labeled`)
+          setCuesTrack(null)
+          setCuesText("")
+        },
+        onError: (e) => toast.error(`Tracklist failed: ${e.message}`),
+      },
+    )
   }
 
   const copyTitle = async (t: Track) => {
@@ -557,6 +579,18 @@ export function TrackList({
                     </button>
                     <button
                       type="button"
+                      onClick={() => {
+                        setCuesTrack(t)
+                        setCuesText("")
+                      }}
+                      aria-label={`Paste tracklist for ${displayTitle(t)}`}
+                      title="Paste a tracklist (for full DJ sets) to label the drops"
+                      className="-mr-1 flex h-6 shrink-0 items-center rounded-md px-1 text-muted-foreground/60 opacity-0 transition-all hover:bg-accent/60 hover:text-foreground focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-ring group-hover:opacity-100"
+                    >
+                      <ListMusic className="h-3.5 w-3.5" />
+                    </button>
+                    <button
+                      type="button"
                       onClick={() => startEdit(t)}
                       aria-label={`Rename ${displayTitle(t)}`}
                       title="Rename track"
@@ -758,13 +792,15 @@ export function TrackList({
                                 }}
                                 title={`Add Drop ${i + 1} to the mix`}
                               >
-                                <span className="flex shrink-0 items-center gap-1.5 font-medium">
+                                <span className="flex min-w-0 items-center gap-1.5 font-medium">
                                   {isAdded ? (
-                                    <Check className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400" />
+                                    <Check className="h-3.5 w-3.5 shrink-0 text-emerald-600 dark:text-emerald-400" />
                                   ) : (
-                                    <Zap className="h-3.5 w-3.5 text-amber-500 dark:text-amber-400" />
+                                    <Zap className="h-3.5 w-3.5 shrink-0 text-amber-500 dark:text-amber-400" />
                                   )}
-                                  Drop {i + 1}
+                                  <span className="truncate" title={d.title ?? undefined}>
+                                    {d.title ?? `Drop ${i + 1}`}
+                                  </span>
                                 </span>
                                 <span className="truncate font-mono text-[11px] tabular-nums text-muted-foreground">
                                   {formatDuration(d.start_s)}–
@@ -784,6 +820,38 @@ export function TrackList({
         })}
       </ul>
       </div>
+
+      <Dialog open={!!cuesTrack} onOpenChange={(o) => !o && setCuesTrack(null)}>
+        <DialogContent className="flex max-h-[80vh] flex-col sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <ListMusic className="h-4 w-4 text-primary" />
+              Tracklist for {cuesTrack ? displayTitle(cuesTrack) : ""}
+            </DialogTitle>
+          </DialogHeader>
+          <p className="text-[12px] leading-relaxed text-muted-foreground">
+            Paste one track per line, like "1:37 - Artist - Title". Timestamps
+            map each detected drop to its song; a list without timestamps
+            labels the drops in order.
+          </p>
+          <textarea
+            value={cuesText}
+            onChange={(e) => setCuesText(e.target.value)}
+            placeholder={"0:00 - Intro\n1:37 - Artist - Title\n..."}
+            spellCheck={false}
+            className="min-h-48 w-full flex-1 resize-y rounded-md border border-border bg-background p-2 font-mono text-xs focus-visible:outline-2 focus-visible:outline-ring"
+          />
+          <DialogFooter>
+            <Button variant="outline" size="sm" onClick={() => setCuesTrack(null)}>
+              Cancel
+            </Button>
+            <Button size="sm" disabled={setCues.isPending || !cuesText.trim()} onClick={saveCues}>
+              {setCues.isPending && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+              Save tracklist
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={bulkOpen} onOpenChange={setBulkOpen}>
         <DialogContent className="flex max-h-[80vh] flex-col sm:max-w-xl">

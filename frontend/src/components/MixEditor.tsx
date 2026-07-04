@@ -201,19 +201,20 @@ export function MixEditor({
       </CardHeader>
 
       <CardContent className="min-w-0 flex-1 space-y-4 overflow-y-auto overflow-x-hidden">
-        <div className="flex items-center justify-between">
-          <div className="text-[11px] font-semibold uppercase tracking-widest text-primary/80">
+        <div className="flex flex-wrap items-center justify-between gap-y-1">
+          <div className="shrink-0 whitespace-nowrap text-[11px] font-semibold uppercase tracking-widest text-primary/80">
             Clips · {clips.length}
           </div>
-          <div className="flex items-center gap-1">
+          <div className="flex shrink-0 items-center gap-0.5">
             <Button
               variant="ghost"
               size="sm"
               onClick={autoOrder}
               disabled={clips.length < 2}
-              className="h-7 text-xs"
+              className="h-7 px-2 text-xs"
+              title="Reorder clips for harmonic flow (Camelot wheel)"
             >
-              <Wand2 className="h-3 w-3" /> Auto-order (Camelot)
+              <Wand2 className="h-3 w-3" /> Auto-order
             </Button>
             <Button
               variant="ghost"
@@ -229,7 +230,7 @@ export function MixEditor({
                 setClips([])
               }}
               className={cn(
-                "h-7 text-xs",
+                "h-7 px-2 text-xs",
                 confirmClear
                   ? "bg-destructive/15 text-destructive hover:bg-destructive/25 hover:text-destructive"
                   : "text-muted-foreground",

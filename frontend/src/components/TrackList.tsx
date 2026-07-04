@@ -776,6 +776,22 @@ export function TrackList({
                     }
                     return (
                       <ul className="flex w-full min-w-0 flex-col gap-1.5">
+                        {t.duration_s > 600 && (
+                          <li>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="h-7 w-full justify-center gap-1.5 text-xs"
+                              title="Paste or fetch this set's tracklist to label the drops with song names"
+                              onClick={() => {
+                                setCuesTrack(t)
+                                setCuesText("")
+                              }}
+                            >
+                              <ListMusic className="h-3 w-3" /> Tracklist
+                            </Button>
+                          </li>
+                        )}
                         {drops.length > 1 && (
                           <li>
                             <Button

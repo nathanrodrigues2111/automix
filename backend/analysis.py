@@ -493,38 +493,75 @@ def find_drops(
 
 # ---------- Tracklist cues (full DJ sets) ----------
 
-_CUE_RE = re.compile(
-    r"^\s*(?:(\d{1,2}):)?(\d{1,2}):(\d{2})\s*-?\s*(.+?)\s*$"
+_TIME_PART = r"(?:(\d{1,2}):)?(\d{1,2}):(\d{2})"
+_TIME_ONLY_RE = re.compile(r"^\[?\(?" + _TIME_PART + r"\)?\]?$")
+_TIME_LEAD_RE = re.compile(
+    r"^\[?\(?" + _TIME_PART + r"\)?\]?\s*[-–—:.]?\s*(.+)$"
 )
 
 
-def parse_tracklist(text: str) -> list[dict[str, Any]]:
-    """Parse a pasted tracklist into cues.
+def _cue_seconds(h: str | None, m: str, sec: str) -> float:
+    return (int(h) if h else 0) * 3600 + int(m) * 60 + int(sec)
 
-    Lines like "1:37 - Artist - Title" (H:MM:SS or M:SS, hyphen optional)
-    become {"t_s": float, "title": str}. Lines without a leading timestamp
-    become {"t_s": None, "title": str} so an untimestamped list can still
-    label detected drops in order.
+
+def _clean_cue_title(title: str) -> str:
+    """Tidy a tracklist title: strip list numbering and cut mashup "w/"
+    chains down to the primary track (burned titles must stay readable)."""
+    t = re.sub(r"^\d{1,3}[.)]\s*", "", title).strip(" -\t")
+    for sep in (" w/ ", " W/ "):
+        if sep in t:
+            t = t.split(sep, 1)[0].strip()
+    return t
+
+
+def parse_tracklist(text: str) -> list[dict[str, Any]]:
+    """Parse a pasted tracklist into cues — format-agnostic.
+
+    Handles "1:37 - Artist - Title", "[1:37] Title", numbered lists, and
+    the two-line style where the timestamp sits alone on the line above the
+    title (1001tracklists copy format). Lines without any timestamp become
+    order-based cues when the whole list is untimestamped.
     """
     cues: list[dict[str, Any]] = []
+    pending_t: float | None = None
     for raw in text.splitlines():
         line = raw.strip().lstrip("-•*").strip()
+        # strip list numbering ("01." / "3)") before looking for timestamps
+        line = re.sub(r"^\d{1,3}[.)]\s+", "", line)
         if not line:
             continue
-        m = _CUE_RE.match(line)
-        if m and m.group(2) is not None:
-            h = int(m.group(1)) if m.group(1) else 0
-            t = h * 3600 + int(m.group(2)) * 60 + int(m.group(3))
-            title = m.group(4).strip(" -\t")
+        m_only = _TIME_ONLY_RE.match(line)
+        if m_only:
+            pending_t = _cue_seconds(m_only.group(1), m_only.group(2), m_only.group(3))
+            continue
+        m_lead = _TIME_LEAD_RE.match(line)
+        if m_lead:
+            title = _clean_cue_title(m_lead.group(4))
             if title:
-                cues.append({"t_s": float(t), "title": title})
+                cues.append(
+                    {
+                        "t_s": _cue_seconds(
+                            m_lead.group(1), m_lead.group(2), m_lead.group(3)
+                        ),
+                        "title": title,
+                    }
+                )
+            pending_t = None
+            continue
+        title = _clean_cue_title(line)
+        if not title:
+            continue
+        if pending_t is not None:
+            cues.append({"t_s": pending_t, "title": title})
+            pending_t = None
         else:
-            cues.append({"t_s": None, "title": line})
+            cues.append({"t_s": None, "title": title})
     timed = [c for c in cues if c["t_s"] is not None]
     if timed:
         timed.sort(key=lambda c: c["t_s"])
         return timed
     return cues
+
 
 
 def label_drops_with_cues(

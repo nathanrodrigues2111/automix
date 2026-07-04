@@ -95,6 +95,12 @@ def _flat_entries(url: str, max_tracks: int | None) -> list[dict[str, Any]]:
         "extract_flat": "in_playlist",
         "skip_download": True,
     }
+    # A watch URL with an auto-generated radio/mix list (list=RD...) means
+    # the user wants THAT video, not YouTube's endless auto-playlist.
+    from urllib.parse import parse_qs, urlparse
+    q = parse_qs(urlparse(url).query)
+    if q.get("v") and (q.get("list", [""])[0]).startswith("RD"):
+        opts["noplaylist"] = True
     with yt_dlp.YoutubeDL(opts) as ydl:
         info = ydl.extract_info(url, download=False)
     if info is None:

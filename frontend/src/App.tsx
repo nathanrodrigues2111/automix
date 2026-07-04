@@ -288,6 +288,10 @@ export default function App() {
   clipsRef.current = clips
   const monitorTrackIdRef = useRef<string | null>(null)
   monitorTrackIdRef.current = selectedTrackId
+  // True while the live preview is yielding to a direct play request (drop
+  // preview, trim audition): stop the mix preview but hand the player over
+  // instead of pausing it.
+  const monitorYieldRef = useRef(false)
 
   useEffect(() => {
     const status = livePreview.state.status
@@ -295,7 +299,8 @@ export default function App() {
     if (status === "idle") {
       if (p) {
         p.muted = false
-        if (!p.paused) p.pause()
+        if (monitorYieldRef.current) monitorYieldRef.current = false
+        else if (!p.paused) p.pause()
       }
       return
     }
@@ -304,6 +309,7 @@ export default function App() {
     let raf = 0
     const tick = () => {
       raf = requestAnimationFrame(tick)
+      if (monitorYieldRef.current) return // a direct playback is taking over
       const ph = livePreview.getPlayhead()
       const clip = ph ? clipsRef.current[ph.index] : undefined
       if (!ph || !clip) return
@@ -369,6 +375,16 @@ export default function App() {
     setDropStart(best?.start_s ?? selectedTrack?.analysis?.drop_start_s ?? 0)
     setDropEnd(best?.end_s ?? selectedTrack?.analysis?.drop_end_s ?? 0)
   }
+
+  // Any direct play request while the mix preview runs: the preview yields.
+  useEffect(() => {
+    if (!playRequest) return
+    if (livePreview.state.status !== "idle") {
+      monitorYieldRef.current = true
+      livePreview.stop()
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [playRequest])
 
   const handlePreviewDrop = (t: Track, drop: Drop) => {
     setSelectedTrackId(t.id)

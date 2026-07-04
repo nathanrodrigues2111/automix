@@ -153,7 +153,7 @@ def _snap_to_downbeat(t: float, downbeats: list[float]) -> float:
     return min(downbeats, key=lambda d: abs(d - t))
 
 
-DROPS_VERSION = 2
+DROPS_VERSION = 3
 
 
 def find_drops(
@@ -235,14 +235,14 @@ def find_drops(
     # one.
     # Tuned against the reference EDMPAPA mix (014oXybzUkc): kicks land every
     # ~19s, buildups run 4-7s, drop bodies sustain 4-9s. Clip = buildup + body.
-    min_buildup_s = 2.0
     max_buildup_s = 8.0
-    min_drop_len_s = 8.0
-    max_drop_len_s = 10.0
 
     # Smoothed RMS for measuring sustained drop energy (~0.5s window).
     rms_smooth_win = max(1, int(0.5 * sr / hop))
     rms_smooth = np.convolve(rms, np.ones(rms_smooth_win) / rms_smooth_win, mode="same")
+    rms_low_smooth = np.convolve(
+        rms_low, np.ones(rms_smooth_win) / rms_smooth_win, mode="same"
+    )
 
     def _scan_drop_end(peak_idx: int) -> float:
         peak_rms = float(rms_smooth[peak_idx])
@@ -255,13 +255,24 @@ def find_drops(
 
     def _scan_buildup_start(peak_idx: int) -> float:
         # Look back at most `max_buildup_s` worth of frames; pick the minimum
-        # energy point — that's where the buildup energy started rising.
+        # BASS energy point — the "breath" right before the kick. Full-band
+        # RMS is the wrong signal here: vocals/synths keep it flat through
+        # the buildup while only the bass dies out, so a full-band argmin
+        # lands many seconds too early (e.g. Countdown: 7.8s vs the real
+        # breath at 14.1s before a 15.4s kick).
         look_back = int(max_buildup_s * sr / hop)
         start_idx = max(0, peak_idx - look_back)
         if start_idx >= peak_idx:
             return float(librosa.frames_to_time(peak_idx, sr=sr, hop_length=hop))
-        segment = rms_smooth[start_idx:peak_idx]
-        min_offset = int(np.argmin(segment))
+        segment = rms_low_smooth[start_idx:peak_idx]
+        # LAST quiet pocket, not the global argmin: when a track's bass stays
+        # low through a long breakdown, the overall minimum sits many seconds
+        # before the kick — the breath is the quiet frame CLOSEST to it.
+        lo = float(np.min(segment))
+        hi = float(np.max(segment))
+        thresh = lo + 0.15 * (hi - lo)
+        below = np.nonzero(segment <= thresh)[0]
+        min_offset = int(below[-1]) if below.size else int(np.argmin(segment))
         return float(librosa.frames_to_time(start_idx + min_offset, sr=sr, hop_length=hop))
 
     bar_s = 4.0 * 60.0 / bpm if bpm > 0 else 1.875
@@ -343,12 +354,20 @@ def find_drops(
         if end - kick_t < 3.5 * bar_s:
             continue
 
+        # Per-track buildup: how far before the kick this track's own bass
+        # breath sits — no general fixed offset works across tracks (some
+        # have long risers, some drop straight in after one silent beat).
+        beat_s = 60.0 / bpm if bpm > 0 else 0.5
+        min_buildup = max(0.5, beat_s)
         buildup_start_t = _scan_buildup_start(peak_idx)
-        buildup_s = max(min_buildup_s, min(max_buildup_s, kick_t - buildup_start_t))
+        buildup_s = max(min_buildup, min(max_buildup_s, kick_t - buildup_start_t))
         desired_start = max(0.0, kick_t - buildup_s)
         start = _snap_to_downbeat(desired_start, dbs) if dbs else desired_start
-        if start >= kick_t:
-            start = max(0.0, kick_t - min_buildup_s)
+        # The downbeat grid can be sparse (half-tempo tracking → one line per
+        # 2 bars); if the snap flings the start far from the track's actual
+        # breath, trust the energy scan instead.
+        if start >= kick_t or start < desired_start - 1.0:
+            start = desired_start
 
         if end <= kick_t or end <= start:
             continue

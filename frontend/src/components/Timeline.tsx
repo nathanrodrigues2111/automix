@@ -81,6 +81,10 @@ export function Timeline({
   const overlayRef = useRef<HTMLDivElement>(null)
   const wsRef = useRef<WaveSurfer | null>(null)
   const [dragging, setDragging] = useState<"start" | "end" | null>(null)
+  // Mirrored into a ref so the playhead-follow loops can check it without
+  // re-subscribing: while a handle is being dragged, the view must not move.
+  const draggingRef = useRef<"start" | "end" | null>(null)
+  draggingRef.current = dragging
   const [view, setView] = useState<ViewGeom>({ scroll: 0, totalW: 0, visibleW: 0 })
   // null = fit the whole track to the container width (no h-scroll).
   const [pxPerSec, setPxPerSec] = useState<number | null>(null)
@@ -168,7 +172,10 @@ export function Timeline({
       barGap: 1,
       barRadius: 2,
       normalize: true,
-      autoScroll: true,
+      // Scrolling is owned by followPlayhead(); wavesurfer's built-in
+      // autoScroll also fires on programmatic seeks (e.g. while dragging a
+      // trim handle auditions the edit), which would yank the view around.
+      autoScroll: false,
       url: trackVideoUrl(track.id),
       plugins: [regions, timeline],
     })
@@ -238,7 +245,7 @@ export function Timeline({
       const dur = ws.getDuration()
       if (dur > 0) {
         ws.seekTo(externalTime / dur)
-        followPlayhead(externalTime)
+        if (!draggingRef.current) followPlayhead(externalTime)
       }
     }
   }, [externalTime, isPlaying, followPlayhead])
@@ -256,7 +263,7 @@ export function Timeline({
         const videoEl = player.el?.querySelector("video")
         const t = videoEl ? videoEl.currentTime : player.currentTime
         ws.setTime(t)
-        followPlayhead(t, true)
+        if (!draggingRef.current) followPlayhead(t, true)
         syncView()
       }
       raf = requestAnimationFrame(tick)

@@ -11,7 +11,6 @@ import {
   RefreshCw,
   Repeat,
   Settings2,
-  Sliders,
   Sun,
   Waves,
 } from "lucide-react"
@@ -102,6 +101,21 @@ const DEFAULT_CONFIG: Omit<RenderConfig, "clips"> = {
   outro_s: 10, // black outro reserved for YouTube end screens
   resolution: "1080p", // final render canvas
   harmonic_pitch_shift_max_semitones: 0, // don't pitch-shift either
+}
+
+/** Material play_circle_filled — the app logo mark. */
+function PlayCircleIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      viewBox="0 0 24 24"
+      fill="currentColor"
+      className={className}
+      aria-hidden="true"
+    >
+      <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 14.5v-9l6 4.5-6 4.5z" />
+    </svg>
+  )
 }
 
 function uid(): string {
@@ -579,7 +593,7 @@ export default function App() {
       <header className="relative z-40 flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-b border-border/60 bg-gradient-to-b from-background to-background/60 px-6 py-3 backdrop-blur">
         <div className="flex shrink-0 items-center gap-3">
           <div className="flex h-8 w-8 items-center justify-center rounded-md bg-primary/15 ring-1 ring-primary/30">
-            <Sliders className="h-4 w-4 text-primary" />
+            <PlayCircleIcon className="h-4 w-4 text-primary" />
           </div>
           <div className="flex items-baseline gap-2">
             <h1 className="bg-gradient-to-r from-foreground to-primary bg-clip-text text-lg font-semibold tracking-tight text-transparent">

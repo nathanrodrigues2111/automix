@@ -5,6 +5,7 @@ import {
   Globe,
   Loader2,
   ListMusic,
+  RefreshCw,
   Search,
   Music,
   Pause,
@@ -580,6 +581,33 @@ export function TrackList({
                     >
                       <Copy className="h-3.5 w-3.5" />
                     </button>
+                    {t.analyzed && (
+                      <button
+                        type="button"
+                        disabled={isAnalyzing}
+                        onClick={() =>
+                          analyze.mutate(
+                            { track_id: t.id },
+                            {
+                              onSuccess: (res) =>
+                                setJobByTrack((prev) => ({
+                                  ...prev,
+                                  [t.id]: res.job_id,
+                                })),
+                              onError: (e) =>
+                                toast.error(`Re-analyze failed: ${e.message}`),
+                            },
+                          )
+                        }
+                        aria-label={`Re-analyze ${displayTitle(t)}`}
+                        title="Re-analyze this track (keeps its tracklist cues)"
+                        className="-mr-1 flex h-6 shrink-0 items-center rounded-md px-1 text-muted-foreground/60 opacity-0 transition-all hover:bg-accent/60 hover:text-foreground focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-ring group-hover:opacity-100 disabled:opacity-40"
+                      >
+                        <RefreshCw
+                          className={cn("h-3.5 w-3.5", isAnalyzing && "animate-spin")}
+                        />
+                      </button>
+                    )}
                     <button
                       type="button"
                       onClick={() => {

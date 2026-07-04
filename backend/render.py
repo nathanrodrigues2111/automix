@@ -439,7 +439,9 @@ def compute_title_windows(
 
     Uses the same offset math as _xfade_videos: part i starts at
     s_i = s_{i-1} + d_{i-1} - cf_{i-1}; the title switches at each xfade
-    midpoint (offset_i + cf_i / 2). Pure function so it's unit-testable.
+    END (offset_i + cf_i) — that's exactly where the incoming clip's kick
+    slams in, so the new title lands ON the drop. Pure function so it's
+    unit-testable.
     """
     if not durations:
         return []
@@ -450,7 +452,7 @@ def compute_title_windows(
     for i in range(1, len(durations)):
         cf = max(0.05, crossfades_s[i - 1])
         offset = max(0.0, cumulative - cf)
-        switches.append(offset + cf / 2.0)
+        switches.append(offset + cf)
         cumulative = cumulative + durations[i] - cf
     total = cumulative
     windows: list[tuple[float, float]] = []
@@ -605,9 +607,17 @@ def _xfade_videos(
     crossfades_s: list[float],
     out_path: Path,
     proxy: bool = False,
+    durations: list[float] | None = None,
 ) -> None:
     """Concat parts with per-boundary video crossfades. crossfades_s has one
-    fewer element than parts (one per transition)."""
+    fewer element than parts (one per transition).
+
+    `durations` overrides the probed video durations for the offset math —
+    pass the AUDIO clip lengths so the video fades land exactly on the audio
+    seams. Video re-encodes quantize to frames (±33ms/clip) and that drift
+    accumulates across the mix if the video is its own timing authority.
+    Each input is tail-padded (frozen last frame) so an audio-derived offset
+    slightly past a video's end never underruns."""
     if not parts:
         raise ValueError("no parts")
     if len(parts) == 1:
@@ -616,31 +626,45 @@ def _xfade_videos(
     if len(crossfades_s) != len(parts) - 1:
         raise ValueError("crossfades count must be len(parts) - 1")
 
-    durations: list[float] = [_probe_duration(p) for p in parts]
+    if durations is None:
+        durations = [_probe_duration(p) for p in parts]
 
     inputs: list[str] = []
     for p in parts:
         inputs.extend(["-i", str(p)])
 
     filter_parts: list[str] = []
+    # Freeze-frame pad every input so xfade offsets computed from the audio
+    # timeline always have video to fade with.
+    pad_labels: list[str] = []
+    for i in range(len(parts)):
+        lbl = f"p{i}"
+        filter_parts.append(
+            f"[{i}:v]tpad=stop_mode=clone:stop_duration=1.0[{lbl}]"
+        )
+        pad_labels.append(lbl)
+
     cumulative = durations[0]
-    prev_label = "0:v"
+    prev_label = pad_labels[0]
     for i in range(1, len(parts)):
         cf = max(0.05, crossfades_s[i - 1])
         offset = max(0.0, cumulative - cf)
         next_label = f"v{i}"
         filter_parts.append(
-            f"[{prev_label}][{i}:v]xfade=transition=fade:duration={cf:.3f}:offset={offset:.3f}[{next_label}]"
+            f"[{prev_label}][{pad_labels[i]}]xfade=transition=fade:duration={cf:.3f}:offset={offset:.3f}[{next_label}]"
         )
         cumulative = cumulative + durations[i] - cf
         prev_label = next_label
+
+    # Drop the last input's freeze-frame pad from the final cut.
+    filter_parts.append(f"[{prev_label}]trim=duration={cumulative:.3f}[vout]")
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     cmd = [
         "ffmpeg", "-y",
         *inputs,
         "-filter_complex", ";".join(filter_parts),
-        "-map", f"[{prev_label}]",
+        "-map", "[vout]",
         "-an",
         *_x264_encode_args(proxy),
         "-pix_fmt", "yuv420p",
@@ -937,17 +961,15 @@ def render_mix(
             period = float(np.median(ivs))
             if not 0.25 <= period <= 1.0:
                 return planned_cf
-            # anchor on the last kick that sits ON the steady grid (last kick
-            # of a run of near-period intervals)
-            last = float(times[-1])
+            # Anchor on the last kick that sits ON the steady grid (last kick
+            # of a run of near-period intervals) — empirically the most
+            # reliable anchor across this library; averaging approaches get
+            # dragged by the clip's own lead-in pulses.
+            ph = float(times[-1])
             for j in range(len(ivs) - 1, -1, -1):
                 if abs(ivs[j] - period) < 0.12 * period:
-                    last = float(times[j + 1])
+                    ph = float(times[j + 1])
                     break
-            # kick-grid point nearest the outgoing end (k=0: the outgoing's
-            # final kick IS at the end — the incoming kick replaces it)
-            k = max(0, round((a_len - last) / period))
-            t_next = last + k * period
             envb, esrb, ehopb, offb = _env(b_wav, kb_expected - 1.0, kb_expected + 1.0)
             tb = _peak_times(envb, esrb, ehopb, offb, float(np.max(envb)) * 0.25)
             if not len(tb):
@@ -955,8 +977,14 @@ def render_mix(
             # Peak NEAREST the expected kick — the lead-in often carries a
             # riser bass pulse a beat early, which must not win.
             kb = float(tb[int(np.argmin(np.abs(tb - kb_expected)))])
+            # Alignment is modulo one kick period: choose the outgoing grid
+            # point that keeps the crossfade closest to plan. Picking the
+            # point nearest the clip end instead led to half-beat-ambiguous
+            # choices (and bails) whenever the needed shift was ~0.5 beats.
+            k = round((a_len + kb - planned_cf - ph) / period)
+            t_next = ph + k * period
             cf = a_len + kb - t_next
-            if cf < 0.2 or abs(cf - planned_cf) > 0.6 * period:
+            if cf < 0.2:
                 print(
                     f"[align] BAIL cf={cf:.3f} planned={planned_cf:.3f} "
                     f"period={period:.3f} kb={kb:.3f} t_next={t_next:.3f} a_len={a_len:.3f}"
@@ -1013,7 +1041,17 @@ def render_mix(
     if len(clip_videos) == 1:
         shutil.copy(clip_videos[0], concat_video)
     else:
-        _xfade_videos(clip_videos, crossfade_durations, concat_video, proxy=proxy)
+        # The AUDIO timeline is the truth: video re-encodes quantize to
+        # frames, so audio clip lengths drive the fade offsets.
+        import soundfile as sf
+        audio_lens = [
+            sf.info(str(p)).frames / sf.info(str(p)).samplerate
+            for p in clip_audios
+        ]
+        _xfade_videos(
+            clip_videos, crossfade_durations, concat_video,
+            proxy=proxy, durations=audio_lens,
+        )
 
     if progress:
         progress("render", 93.0, "Muxing")
@@ -1027,8 +1065,14 @@ def render_mix(
             progress("render", 96.0, "Applying EDMPAPA branding")
         windows: list[tuple[str, float, float]] = []
         if show_titles:
+            import soundfile as sf
             titles = [_display_title(src) for src in srcs]
-            durations = [_probe_duration(v) for v in clip_videos]
+            # Audio lengths, not video probes: the title switch must land
+            # exactly on each incoming drop's kick in the mixed audio.
+            durations = [
+                sf.info(str(p)).frames / sf.info(str(p)).samplerate
+                for p in clip_audios
+            ]
             spans = compute_title_windows(durations, crossfade_durations)
             windows = [(titles[i], s, e) for i, (s, e) in enumerate(spans)]
         _apply_branding(muxed, out_path, windows, proxy)
@@ -1037,6 +1081,20 @@ def render_mix(
 
     render_id = uuid.uuid4().hex
     record = db.add_render(render_id, str(out_path.relative_to(PROJECT_ROOT)), config)
+    # Seam moments (each incoming drop's kick) on the final timeline — the
+    # fade END of each transition. Useful for verification and UI markers.
+    try:
+        import soundfile as sf
+        lens = [sf.info(str(p)).frames / sf.info(str(p)).samplerate for p in clip_audios]
+        seams = []
+        cursor = lens[0]
+        for i in range(1, len(lens)):
+            seams.append(cursor)
+            cursor = cursor + lens[i] - crossfade_durations[i - 1]
+        record["seam_times"] = seams
+        record["crossfades"] = [float(c) for c in crossfade_durations]
+    except Exception:
+        record["seam_times"] = []
 
     if progress:
         progress("render", 100.0, "Done")

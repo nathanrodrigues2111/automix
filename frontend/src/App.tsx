@@ -417,10 +417,14 @@ export default function App() {
 
   const handleAdd = (t: Track, drop?: Drop) => {
     if (!t.analysis) return
-    const start_s = drop?.start_s ?? t.analysis.drop_start_s
-    const end_s = drop?.end_s
     const kick_s = drop?.kick_s
     const beatSec = 60 / (t.analysis.bpm || 128)
+    // Normalize to the renderer's 2-bar pre-kick lead-in NOW, so the live
+    // preview plays exactly the clip the final render will cut.
+    const rawStart = drop?.start_s ?? t.analysis.drop_start_s
+    const start_s =
+      kick_s != null ? Math.max(0, kick_s - 8 * beatSec) : rawStart
+    const end_s = drop?.end_s
     const length_bars =
       drop && drop.end_s > drop.start_s
         ? Math.max(4, Math.round((drop.end_s - drop.start_s) / (beatSec * 4)))

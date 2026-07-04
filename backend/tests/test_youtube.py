@@ -66,18 +66,18 @@ def test_title_windows_single_clip() -> None:
 
 def test_title_windows_three_clips() -> None:
     # Same math as _xfade_videos:
-    #   part starts: s0=0, s1=10-2=8, s2=8+8-3=13; total=13+12-3? no:
+    #   part starts: s0=0, s1=10-2=8, s2=8+8-3=13
     #   cumulative: 10 -> 10+8-2=16 -> 16+12-3=25
-    #   switch points at xfade midpoints: 8+2/2=9, 13+3/2=14.5
+    #   switch points at xfade ENDS (the incoming drop's kick): 8+2=10, 13+3=16
     windows = compute_title_windows([10.0, 8.0, 12.0], [2.0, 3.0])
-    assert windows == [(0.0, 9.0), (9.0, 14.5), (14.5, 25.0)]
+    assert windows == [(0.0, 10.0), (10.0, 16.0), (16.0, 25.0)]
 
 
 def test_title_windows_clamps_tiny_crossfade() -> None:
     # _xfade_videos clamps crossfades to >= 0.05; the window math must match.
     windows = compute_title_windows([10.0, 10.0], [0.0])
     switch = windows[0][1]
-    assert abs(switch - (10.0 - 0.05 + 0.025)) < 1e-9
+    assert abs(switch - (10.0 - 0.05 + 0.05)) < 1e-9
     assert windows[1] == (switch, 19.95)
 
 

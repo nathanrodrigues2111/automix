@@ -41,6 +41,9 @@ assets/*.avi
 .idea/
 .vscode/
 
+# Playwright MCP session artifacts
+.playwright-mcp/
+
 # OS
 .DS_Store
 Thumbs.db

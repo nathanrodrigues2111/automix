@@ -666,7 +666,8 @@ export function Timeline({
                   {/* Grab bar */}
                   <div
                     className={cn(
-                      "absolute inset-y-0 left-1/2 w-0.5 -translate-x-1/2 rounded-full bg-primary/80 transition-[width,background-color]",
+                      "absolute inset-y-0 left-1/2 w-0.5 -translate-x-1/2 rounded-full transition-[width,background-color]",
+                      isStart ? "bg-emerald-500/80" : "bg-rose-500/80",
                       "group-hover:w-1 group-focus-visible:w-1",
                       isDraggingThis && "w-1",
                     )}
@@ -674,8 +675,8 @@ export function Timeline({
                   {/* Grip nub */}
                   <div
                     className={cn(
-                      "absolute left-1/2 h-3.5 w-2.5 -translate-x-1/2 rounded-sm bg-primary ring-1 ring-black/20",
-                      isStart ? "top-0" : "bottom-0",
+                      "absolute left-1/2 h-3.5 w-2.5 -translate-x-1/2 rounded-sm ring-1 ring-black/20",
+                      isStart ? "top-0 bg-emerald-500" : "bottom-0 bg-rose-500",
                       "group-focus-visible:ring-2 group-focus-visible:ring-ring",
                     )}
                   />

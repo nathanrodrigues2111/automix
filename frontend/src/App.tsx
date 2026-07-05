@@ -584,7 +584,7 @@ export default function App() {
     // from the drop the user is actually listening to. Also mark the seed key
     // as consumed so the best-drop seeding doesn't overwrite this range when
     // the selected track changes.
-    setPrevDropSeedKey(`${t.id}:${t.analysis ? "a" : "u"}:${dropBarsSetting}`)
+    setPrevDropSeedKey(`${t.id}:${t.analysis ? "a" : "u"}`)
     const end = effectiveDropEnd(drop, t.analysis?.bpm) ?? drop.end_s
     setDropStart(drop.start_s)
     setDropEnd(end)

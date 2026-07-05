@@ -12,9 +12,24 @@ import { Maximize2, Pause, Play, ZoomIn, ZoomOut } from "lucide-react"
 import type { MediaPlayerInstance } from "@vidstack/react"
 import type { Drop, Track } from "@/api/types"
 import { trackVideoUrl } from "@/api/client"
+import { accentRgb } from "@/lib/accent"
 import { apiUrl } from "@/lib/backend"
 import { useEffectiveTheme } from "@/lib/theme"
 import { cn } from "@/lib/utils"
+
+/** Waveform tint derived from the CURRENT accent color: the body fades from
+ *  the accent down to a soft wash, and played audio brightens toward white. */
+function waveAccentColors() {
+  const [r, g, b] = accentRgb()
+  const lift = (c: number) => Math.round(c + (255 - c) * 0.4)
+  return {
+    waveColor: [`rgba(${r}, ${g}, ${b}, 0.75)`, `rgba(${r}, ${g}, ${b}, 0.3)`],
+    progressColor: [
+      `rgba(${lift(r)}, ${lift(g)}, ${lift(b)}, 1)`,
+      `rgba(${r}, ${g}, ${b}, 0.75)`,
+    ],
+  }
+}
 
 /** Minimum selection length in seconds. */
 const MIN_GAP_S = 1
@@ -174,8 +189,7 @@ export function Timeline({
     let cancelled = false
     const ws = WaveSurfer.create({
       container: containerRef.current,
-      waveColor: ["rgba(168, 85, 247, 0.75)", "rgba(217, 70, 239, 0.35)"],
-      progressColor: ["rgba(192, 132, 252, 1)", "rgba(217, 70, 239, 0.75)"],
+      ...waveAccentColors(),
       cursorColor: isDark ? "rgba(255,255,255,0.85)" : "rgba(24,24,34,0.85)",
       cursorWidth: 2,
       height: WAVE_HEIGHT,
@@ -253,6 +267,11 @@ export function Timeline({
     subs.push(ws.on("scroll", syncView))
     subs.push(ws.on("zoom", syncView))
     subs.push(ws.on("redrawcomplete", syncView))
+
+    // Re-tint the waveform in place when the user picks a new accent.
+    const onAccent = () => ws.setOptions(waveAccentColors())
+    window.addEventListener("automix:accent", onAccent)
+    subs.push(() => window.removeEventListener("automix:accent", onAccent))
 
     return () => {
       cancelled = true
@@ -647,8 +666,7 @@ export function Timeline({
                   {/* Grab bar */}
                   <div
                     className={cn(
-                      "absolute inset-y-0 left-1/2 w-0.5 -translate-x-1/2 rounded-full transition-[width,background-color]",
-                      isStart ? "bg-emerald-500/80" : "bg-rose-500/80",
+                      "absolute inset-y-0 left-1/2 w-0.5 -translate-x-1/2 rounded-full bg-primary/80 transition-[width,background-color]",
                       "group-hover:w-1 group-focus-visible:w-1",
                       isDraggingThis && "w-1",
                     )}
@@ -656,8 +674,8 @@ export function Timeline({
                   {/* Grip nub */}
                   <div
                     className={cn(
-                      "absolute left-1/2 h-3.5 w-2.5 -translate-x-1/2 rounded-sm ring-1 ring-black/20",
-                      isStart ? "top-0 bg-emerald-500" : "bottom-0 bg-rose-500",
+                      "absolute left-1/2 h-3.5 w-2.5 -translate-x-1/2 rounded-sm bg-primary ring-1 ring-black/20",
+                      isStart ? "top-0" : "bottom-0",
                       "group-focus-visible:ring-2 group-focus-visible:ring-ring",
                     )}
                   />

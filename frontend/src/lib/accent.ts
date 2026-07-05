@@ -66,6 +66,32 @@ export function applyAccent(value: string | null): void {
   root.style.setProperty("--primary", v)
   root.style.setProperty("--ring", v)
   void updateFavicon(v)
+  // Canvas-based UI (e.g. the timeline waveform) can't use CSS vars; let it
+  // know the accent changed so it can re-resolve its colors.
+  window.dispatchEvent(new CustomEvent("automix:accent"))
+}
+
+/** Resolve the CURRENT accent (--primary) to [r, g, b]. Canvas colors can't
+ *  reference CSS vars, and the value is an oklch() string, so it's rendered
+ *  onto a 1x1 canvas and read back. Falls back to the default Blue. */
+export function accentRgb(): [number, number, number] {
+  const fallback: [number, number, number] = [59, 130, 246]
+  try {
+    const v = getComputedStyle(document.documentElement)
+      .getPropertyValue("--primary")
+      .trim()
+    if (!v) return fallback
+    const canvas = document.createElement("canvas")
+    canvas.width = canvas.height = 1
+    const ctx = canvas.getContext("2d", { willReadFrequently: true })
+    if (!ctx) return fallback
+    ctx.fillStyle = v
+    ctx.fillRect(0, 0, 1, 1)
+    const d = ctx.getImageData(0, 0, 1, 1).data
+    return [d[0], d[1], d[2]]
+  } catch {
+    return fallback
+  }
 }
 
 export function loadAccent(): string | null {

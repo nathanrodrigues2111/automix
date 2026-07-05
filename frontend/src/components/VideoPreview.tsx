@@ -107,11 +107,14 @@ export function VideoPreview({
   }, [seekRequest])
 
   // Seek + autoplay (preview-drop click). Sets the drop window so playback
-  // loops (or stops) at the drop boundary. Switching drops/tracks replaces
-  // the window via this effect's cleanup + re-run.
+  // loops (or stops) at the drop boundary. A request with a NEW key seeks and
+  // plays; re-emitting the same key just retargets the window, so the loop
+  // end can follow the drop length setting without restarting playback.
+  const lastPlayKeyRef = useRef<number | null>(null)
   useEffect(() => {
     if (!playRequest) {
       dropWindowRef.current = null
+      lastPlayKeyRef.current = null
       return
     }
     const player = playerRef.current
@@ -120,6 +123,8 @@ export function VideoPreview({
       playRequest.endTime !== undefined && playRequest.endTime > playRequest.time
         ? { start: playRequest.time, end: playRequest.endTime }
         : null
+    if (playRequest.key === lastPlayKeyRef.current) return
+    lastPlayKeyRef.current = playRequest.key
     const dispose = onceCanPlay(player, () => {
       player.currentTime = playRequest.time
       player.play().catch(() => {
@@ -128,7 +133,6 @@ export function VideoPreview({
     })
     return () => {
       dispose()
-      dropWindowRef.current = null
     }
   }, [playRequest])
 

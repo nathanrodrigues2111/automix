@@ -72,7 +72,7 @@ const TOUR_STEPS: TourStep[] = [
   {
     target: "timeline",
     title: "Timeline",
-    text: "The selected track's waveform with its beat grid and drop bands. Drag the green and red handles to trim a cut (hold Shift to skip beat snapping), Ctrl+scroll to zoom, and use Add selection to push your custom cut into the mix.",
+    text: "The selected track's waveform with its beat grid and drop bands. Drag the trim handles to adjust a cut (hold Shift to skip beat snapping), Ctrl+scroll to zoom, and use Add selection to push your custom cut into the mix.",
   },
   {
     target: "mixer",
@@ -468,6 +468,25 @@ export default function App() {
   }, [clips, trackById])
   const selectedTrack = selectedTrackId ? trackById[selectedTrackId] : null
 
+  // Settings > Mix > Drop length: when set (> 0), every drop body runs exactly
+  // N bars from its kick, using the drop's own measured kick period. 0 = auto
+  // (the detected drop end). Applied everywhere a drop end is used: drop
+  // previews, the trim region, added clips, and clips already in the timeline.
+  const dropBarsSetting = config.drop_bars ?? 0
+  const effectiveDropEnd = useCallback(
+    (
+      drop: Pick<Drop, "end_s" | "kick_s" | "kick_period_s">,
+      bpm?: number | null,
+    ) => {
+      if (dropBarsSetting > 0 && drop.kick_s != null) {
+        const beat = drop.kick_period_s ?? 60 / (bpm || 128)
+        return drop.kick_s + dropBarsSetting * 4 * beat
+      }
+      return drop.end_s
+    },
+    [dropBarsSetting],
+  )
+
   // Seed the editable drop range from the selected track's analysis. Uses the
   // "adjust state during render" pattern instead of an effect so switching
   // tracks doesn't cascade an extra render.
@@ -484,8 +503,70 @@ export default function App() {
       ? drops.reduce((a, b) => (b.score > a.score ? b : a))
       : null
     setDropStart(best?.start_s ?? selectedTrack?.analysis?.drop_start_s ?? 0)
-    setDropEnd(best?.end_s ?? selectedTrack?.analysis?.drop_end_s ?? 0)
+    setDropEnd(
+      (best ? effectiveDropEnd(best, selectedTrack?.analysis?.bpm) : null) ??
+        selectedTrack?.analysis?.drop_end_s ??
+        0,
+    )
   }
+
+  // Changing the drop length re-trims every kick-anchored clip already in the
+  // timeline: the end snaps to the new bar count (or back to the detected end
+  // on auto). Runs only when the setting changes, so beat nudges and manual
+  // edits survive everything else.
+  const trackByIdRef = useRef(trackById)
+  trackByIdRef.current = trackById
+  const playRequestRef = useRef(playRequest)
+  playRequestRef.current = playRequest
+  const dropBarsAppliedRef = useRef<number | null>(null)
+  useEffect(() => {
+    if (dropBarsAppliedRef.current === null) {
+      dropBarsAppliedRef.current = dropBarsSetting
+      return
+    }
+    if (dropBarsAppliedRef.current === dropBarsSetting) return
+    dropBarsAppliedRef.current = dropBarsSetting
+    setClips((prev) =>
+      prev.map((c) => {
+        if (c.kick_s == null) return c
+        const t = trackByIdRef.current[c.track_id]
+        const drop = (t?.analysis?.drops ?? []).find(
+          (d) => d.kick_s != null && Math.abs(d.kick_s - c.kick_s!) < 0.05,
+        )
+        if (!drop) return c
+        const end = effectiveDropEnd(drop, t?.analysis?.bpm)
+        if (end == null || end <= c.start_s) return c
+        return { ...c, end_s: end }
+      }),
+    )
+    // A drop preview looping right now retargets its loop end in place: same
+    // key = VideoPreview updates the window without re-seeking, so the loop
+    // wraps at the new length on the next pass.
+    const pr = playRequestRef.current
+    if (pr) {
+      const t = trackByIdRef.current[pr.trackId]
+      const drop = (t?.analysis?.drops ?? []).find(
+        (d) => Math.abs(d.start_s - pr.time) < 0.05,
+      )
+      if (drop) {
+        const end = effectiveDropEnd(drop, t?.analysis?.bpm) ?? drop.end_s
+        if (pr.endTime !== end) setPlayRequest({ ...pr, endTime: end })
+      }
+    }
+    // The trim end marker follows too: re-trim the selection to the drop
+    // sitting under the markers (matched by start, else by kick in range).
+    const sel = selectedTrackId ? trackByIdRef.current[selectedTrackId] : null
+    const drops = sel?.analysis?.drops ?? []
+    const cur =
+      drops.find((d) => Math.abs(d.start_s - dropStart) < 0.05) ??
+      drops.find(
+        (d) => d.kick_s != null && d.kick_s >= dropStart && d.kick_s <= dropEnd,
+      )
+    if (cur) {
+      const end = effectiveDropEnd(cur, sel?.analysis?.bpm) ?? cur.end_s
+      if (end > dropStart) setDropEnd(end)
+    }
+  }, [dropBarsSetting, effectiveDropEnd, selectedTrackId, dropStart, dropEnd])
 
   // Any direct play request while the mix preview runs: the preview yields.
   useEffect(() => {
@@ -503,14 +584,15 @@ export default function App() {
     // from the drop the user is actually listening to. Also mark the seed key
     // as consumed so the best-drop seeding doesn't overwrite this range when
     // the selected track changes.
-    setPrevDropSeedKey(`${t.id}:${t.analysis ? "a" : "u"}`)
+    setPrevDropSeedKey(`${t.id}:${t.analysis ? "a" : "u"}:${dropBarsSetting}`)
+    const end = effectiveDropEnd(drop, t.analysis?.bpm) ?? drop.end_s
     setDropStart(drop.start_s)
-    setDropEnd(drop.end_s)
+    setDropEnd(end)
     setPreviewingKey(`${t.id}:${drop.start_s.toFixed(2)}`)
     setPlayRequest({
       trackId: t.id,
       time: drop.start_s,
-      endTime: drop.end_s,
+      endTime: end,
       key: Date.now(),
     })
     setActiveTab("preview")
@@ -532,12 +614,7 @@ export default function App() {
       kick_s != null ? Math.max(0, kick_s - 8 * beatSec) : rawStart
     // Settings > Mix > Drop length: force every drop body to N bars from
     // its kick (using the drop's own measured kick period when available).
-    const dropBars = config.drop_bars ?? 0
-    const dropBeat = drop?.kick_period_s ?? beatSec
-    const end_s =
-      dropBars > 0 && drop && kick_s != null
-        ? kick_s + dropBars * 4 * dropBeat
-        : drop?.end_s
+    const end_s = drop ? effectiveDropEnd(drop, t.analysis.bpm) : undefined
     const length_bars =
       drop && end_s != null && end_s > drop.start_s
         ? Math.max(4, Math.round((end_s - drop.start_s) / (beatSec * 4)))
@@ -838,7 +915,7 @@ export default function App() {
                           size="sm"
                           variant="secondary"
                           className="h-6 px-2 text-xs"
-                          title="Add the trimmed selection (drag the green/red markers to adjust) as a clip"
+                          title="Add the trimmed selection (drag the trim markers to adjust) as a clip"
                           onClick={() => {
                             if (!selectedTrack?.analysis) return
                             const kick = (

@@ -9,6 +9,19 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "0.10.0",
+    date: "2026-07-05",
+    title: "Live drop length and an accent-matched timeline",
+    items: [
+      "Changing Drop length in Settings now applies everywhere instantly: drop previews loop the new length, the trim end marker slides to match, and every clip already in the mix re-trims to the new bar count",
+      "A drop looping while you change the setting keeps playing and simply wraps at the new length, no restart",
+      "Set Drop length back to Auto and everything returns to the detected drop ends",
+      "Manual trims are safe: markers only move when the setting itself changes",
+      "The timeline waveform now takes your accent color instead of always purple, re-tinting live when you pick a new accent",
+      "Trim handles and the selection shading follow the accent too",
+    ],
+  },
+  {
     version: "0.9.0",
     date: "2026-07-05",
     title: "Pick your title font, or upload your own",

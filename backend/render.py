@@ -542,7 +542,10 @@ def _probe_duration(path: Path) -> float:
 
 
 def compute_title_windows(
-    durations: list[float], crossfades_s: list[float], switch_at: str = "end"
+    durations: list[float],
+    crossfades_s: list[float],
+    switch_at: str = "end",
+    kick_offsets: list[float] | None = None,
 ) -> list[tuple[float, float]]:
     """Per-part [start, end) windows in the FINAL (post-xfade) timeline.
 
@@ -562,10 +565,15 @@ def compute_title_windows(
     for i in range(1, len(durations)):
         cf = max(0.05, crossfades_s[i - 1])
         offset = max(0.0, cumulative - cf)
-        # "end" switches land ON the incoming kick; lead by ~1.5 video
-        # frames so the burned title (quantized to the 30fps grid) can
-        # never appear AFTER the kick — an editor leads the hit, not lags.
-        switches.append(offset if switch_at == "start" else max(offset, offset + cf - 0.045))
+        # "end" switches land ON the incoming kick. The seam aligner may
+        # slide the actual kick up to half a beat off the nominal seam
+        # (kick_offsets, from its measurements) — follow it, and lead by
+        # ~1.5 video frames so the burned title (quantized to the 30fps
+        # grid) can never appear AFTER the hit.
+        ko = float(kick_offsets[i - 1]) if kick_offsets and i - 1 < len(kick_offsets) else 0.0
+        switches.append(
+            offset if switch_at == "start" else max(offset, offset + cf + ko - 0.045)
+        )
         cumulative = cumulative + durations[i] - cf
     total = cumulative
     windows: list[tuple[float, float]] = []
@@ -773,9 +781,20 @@ def _write_title_ass(title_windows: list[tuple[str, float, float]], out_ass: Pat
         "[Events]",
         "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
     ]
+    import unicodedata
+
+    def _ascii_fold(s: str) -> str:
+        """Tiësto -> Tiesto, Ángela -> Angela: the title font is ASCII-only
+        and libass glyph fallback renders accents in a mismatched font."""
+        folded = unicodedata.normalize("NFKD", s)
+        folded = "".join(ch for ch in folded if not unicodedata.combining(ch))
+        folded = folded.encode("ascii", "ignore").decode("ascii")
+        return folded if folded.strip() else s
+
     for title, start_s, end_s in title_windows:
         if end_s <= start_s:
             continue
+        title = _ascii_fold(title)
         # Fit inside the safe width: shorten (identity-preserving), scale,
         # or wrap to two lines — a raw long title would run off-frame.
         fit_lines, font_size = fit_title(title)
@@ -978,6 +997,8 @@ def _cut_concat_videos(
     proxy: bool = False,
     intermediate: bool = False,
     fps: float = 30.0,
+    fade: float = 0.25,
+    transitions: list[str] | None = None,
 ) -> None:
     """HARD-CUT video timeline (the audio still crossfades underneath).
 
@@ -1017,10 +1038,12 @@ def _cut_concat_videos(
     labels: list[str] = []
     seg_lens: list[float] = []
     v_cursor = 0.0  # frame-quantized running video time
-    # A LITTLE fade at each cut (user: pure hard cut strobes) — the cut
-    # position is unchanged; the incoming picture just blends in over
-    # ~0.25s starting exactly at the cut.
-    fade = 0.25
+    # A LITTLE transition at each cut (a bone-dry cut strobes) — the cut
+    # position is unchanged; the incoming picture takes over across `fade`
+    # seconds starting exactly at the cut. `transitions` cycles per cut
+    # (EDM variety); fade<=0 falls back to pure hard cuts.
+    hard = fade <= 0.01
+    styles = transitions or ["fade"]
     for i in range(len(parts)):
         target_end = cuts[i] if i < len(cuts) else total
         want_len = target_end - v_cursor
@@ -1031,23 +1054,30 @@ def _cut_concat_videos(
         lbl = f"c{i}"
         # Segments before a cut carry `fade` extra tail for the blend;
         # freeze-frame pad so audio-derived lengths can never underrun.
-        ext = seg_len + (fade if i < len(cuts) else 0.0)
+        # fps + settb: xfade requires CFR inputs on one timebase.
+        ext = seg_len + (0.0 if hard or i >= len(cuts) else fade)
         filter_parts.append(
             f"[{i}:v]tpad=stop_mode=clone:stop_duration=3.0,"
             f"trim=start=0:end={ext:.4f},"
-            f"setpts=PTS-STARTPTS[{lbl}]"
+            f"setpts=PTS-STARTPTS,fps={fps:g},settb=AVTB[{lbl}]"
         )
         labels.append(lbl)
-    prev = labels[0]
-    cum = seg_lens[0]
-    for i in range(1, len(labels)):
-        nxt = f"x{i}"
+    if hard:
         filter_parts.append(
-            f"[{prev}][{labels[i]}]xfade=transition=fade:duration={fade:.3f}:offset={cum:.4f}[{nxt}]"
+            "".join(f"[{l}]" for l in labels) + f"concat=n={len(labels)}:v=1:a=0[vout]"
         )
-        cum += seg_lens[i]
-        prev = nxt
-    filter_parts.append(f"[{prev}]trim=duration={total:.4f}[vout]")
+    else:
+        prev = labels[0]
+        cum = seg_lens[0]
+        for i in range(1, len(labels)):
+            nxt = f"x{i}"
+            style = styles[(i - 1) % len(styles)]
+            filter_parts.append(
+                f"[{prev}][{labels[i]}]xfade=transition={style}:duration={fade:.3f}:offset={cum:.4f}[{nxt}]"
+            )
+            cum += seg_lens[i]
+            prev = nxt
+        filter_parts.append(f"[{prev}]trim=duration={total:.4f}[vout]")
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     cmd = [
@@ -1624,12 +1654,21 @@ def render_mix(
             for p in clip_audios
         ]
         if bool(config.get("video_cut", True)):
-            # Hard cut ON each incoming kick (user preference: a simple cut
-            # feels natural; the audio still crossfades underneath).
+            # Cut ON each incoming build (user preference), optionally
+            # softened by a quick transition. "variety" cycles EDM-edit
+            # styles: blend, white flash, blur punch, blackout, glitch.
+            style = str(config.get("video_transition") or "fade")
+            styles = (
+                ["fade", "fadewhite", "hblur", "fadeblack", "pixelize"]
+                if style == "variety"
+                else [style]
+            )
             _cut_concat_videos(
                 clip_videos, crossfade_durations, concat_video,
                 durations=audio_lens, proxy=proxy,
                 intermediate=bool(brand_overlay),
+                fade=0.25 if bool(config.get("video_cut_fade", True)) else 0.0,
+                transitions=styles,
             )
         else:
             _xfade_videos(
@@ -1695,8 +1734,12 @@ def render_mix(
             ]
             # Title always switches at the fade END — the incoming kick.
             # The VIDEO cuts early (at the build), but the new song's name
-            # appears exactly when its drop hits (user-confirmed feel).
-            spans = compute_title_windows(durations, crossfade_durations, switch_at="end")
+            # appears exactly when its drop hits (user-confirmed feel),
+            # following the aligner's MEASURED kick position per seam.
+            spans = compute_title_windows(
+                durations, crossfade_durations, switch_at="end",
+                kick_offsets=[float(si.get("kick_offset") or 0.0) for si in seam_infos],
+            )
             if intro_dur > 0 and first_kick_out > 0 and spans:
                 # No title under the intro animation — the first title
                 # appears when the intro ends (on the first kick).

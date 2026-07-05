@@ -177,6 +177,16 @@ export function useLivePreview(clips: RenderClip[], outroS = 0) {
       await ctx.resume()
 
       const t0 = ctx.currentTime + 0.15
+      // Master limiter: crossfades SUM two -14 LUFS clips, which can push
+      // peaks past full scale and audibly clip the DAC — the renderer has
+      // a final limiter for exactly this; the preview needs one too.
+      const limiter = ctx.createDynamicsCompressor()
+      limiter.threshold.value = -3
+      limiter.knee.value = 0
+      limiter.ratio.value = 20
+      limiter.attack.value = 0.001
+      limiter.release.value = 0.08
+      limiter.connect(ctx.destination)
       const sources: AudioBufferSourceNode[] = []
       const clipStarts: number[] = []
       let cursor = 0
@@ -187,7 +197,7 @@ export function useLivePreview(clips: RenderClip[], outroS = 0) {
         const src = ctx.createBufferSource()
         src.buffer = buf
         const gain = ctx.createGain()
-        src.connect(gain).connect(ctx.destination)
+        src.connect(gain).connect(limiter)
         if (i > 0 && xf > 0) {
           gain.gain.setValueAtTime(0, t0 + startAt)
           gain.gain.setValueCurveAtTime(FADE_IN, t0 + startAt, xf)

@@ -65,19 +65,30 @@ def test_title_windows_single_clip() -> None:
 
 
 def test_title_windows_three_clips() -> None:
-    # Same math as _xfade_videos:
+    # Same math as the video concat:
     #   part starts: s0=0, s1=10-2=8, s2=8+8-3=13
     #   cumulative: 10 -> 10+8-2=16 -> 16+12-3=25
-    #   switch points at xfade ENDS (the incoming drop's kick): 8+2=10, 13+3=16
+    #   switches at xfade ENDS (the incoming kick) minus the 45ms lead the
+    #   30fps title burn needs so it never lags the hit
     windows = compute_title_windows([10.0, 8.0, 12.0], [2.0, 3.0])
-    assert windows == [(0.0, 10.0), (10.0, 16.0), (16.0, 25.0)]
+    assert windows == [(0.0, 9.955), (9.955, 15.955), (15.955, 25.0)]
+
+
+def test_title_windows_follow_measured_kicks() -> None:
+    # The seam aligner may slide the actual kick off the nominal seam;
+    # kick_offsets shifts each switch to the measured position.
+    windows = compute_title_windows(
+        [10.0, 8.0, 12.0], [2.0, 3.0], kick_offsets=[0.2, -0.1]
+    )
+    assert abs(windows[0][1] - (10.0 + 0.2 - 0.045)) < 1e-9
+    assert abs(windows[1][1] - (16.0 - 0.1 - 0.045)) < 1e-9
 
 
 def test_title_windows_clamps_tiny_crossfade() -> None:
-    # _xfade_videos clamps crossfades to >= 0.05; the window math must match.
+    # Crossfades clamp to >= 0.05; the switch keeps the 45ms lead.
     windows = compute_title_windows([10.0, 10.0], [0.0])
     switch = windows[0][1]
-    assert abs(switch - (10.0 - 0.05 + 0.05)) < 1e-9
+    assert abs(switch - (10.0 - 0.045)) < 1e-9
     assert windows[1] == (switch, 19.95)
 
 

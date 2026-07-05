@@ -583,6 +583,7 @@ async def post_youtube_import(req: schemas.YouTubeImportRequest) -> dict:
                 req.max_tracks,
                 req.video_ids,
                 cancel_ev.is_set,
+                req.max_height,
             )
             hub.publish_sync(
                 {
@@ -677,7 +678,8 @@ def _automix_pipeline(req: schemas.AutomixRequest, progress, cancel=None) -> dic
             progress("download", min(30.0, pct * 0.30), msg)
 
         youtube_mod.import_playlist(
-            req.url, IMPORTS_DIR, dl_progress, req.max_tracks, req.video_ids, cancel
+            req.url, IMPORTS_DIR, dl_progress, req.max_tracks, req.video_ids, cancel,
+            req.max_height,
         )
 
     # 2. Determine source tracks.

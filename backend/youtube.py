@@ -12,12 +12,21 @@ import db
 
 ProgressCb = Callable[[str, float, str], None] | None
 
-# Preferred format: highest-quality h264 video + m4a audio so both the browser
-# and the ffmpeg pipeline can play the file without transcoding.
-FORMAT = (
-    "bv*[height<=1080][vcodec^=avc1]+ba[ext=m4a]"
-    "/bv*[height<=1080]+ba/b[height<=1080]/b"
-)
+# Preferred format: absolute highest-resolution video stream (4K VP9/AV1 when
+# YouTube has it) + best audio, merged. m4a audio preferred for MP4-container
+# compatibility; falls back to any best audio (opus) if m4a is unavailable.
+FORMAT = "bv*+ba[ext=m4a]/bv*+ba/b"
+
+
+def _format_for(max_height: int | None) -> str:
+    """yt-dlp format string honoring an optional resolution cap."""
+    if not max_height:
+        return FORMAT
+    h = int(max_height)
+    return (
+        f"bv*[height<={h}]+ba[ext=m4a]"
+        f"/bv*[height<={h}]+ba/b[height<={h}]/b"
+    )
 
 # Trailing "[<youtube-id>]" suffix as produced by our outtmpl. Real IDs are 11
 # chars of [A-Za-z0-9_-]; be a little lenient but require at least one
@@ -164,6 +173,7 @@ def import_playlist(
     max_tracks: int | None = None,
     video_ids: list[str] | None = None,
     cancel: Callable[[], bool] | None = None,
+    max_height: int | None = None,
 ) -> list[dict]:
     """Download every entry of a playlist (or a single video) into dest_dir.
 
@@ -221,7 +231,7 @@ def import_playlist(
             progress("download", min(99.0, overall), f"Downloading {_i + 1}/{n}: {_title}")
 
         opts = {
-            "format": FORMAT,
+            "format": _format_for(max_height),
             "merge_output_format": "mp4",
             "outtmpl": str(dest_dir / "%(title)s [%(id)s].%(ext)s"),
             "restrictfilenames": False,

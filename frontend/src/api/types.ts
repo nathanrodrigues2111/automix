@@ -95,6 +95,8 @@ export interface RenderConfig {
   outro_s?: number
   /** Output canvas: "480p" | "720p" | "1080p" | "1440p" | "2160p". */
   resolution?: string
+  /** Export naming: "file" (source video name + random number) | "timestamp". */
+  filename_style?: string
   harmonic_pitch_shift_max_semitones: number
   proxy?: boolean
 }
@@ -120,6 +122,7 @@ export interface YoutubeImportRequest {
   url: string
   max_tracks?: number | null
   video_ids?: string[] | null
+  max_height?: number | null
 }
 
 export interface PlaylistEntry {
@@ -134,6 +137,7 @@ export interface AutomixRequest {
   track_ids?: string[] | null
   max_tracks?: number | null
   video_ids?: string[] | null
+  max_height?: number | null
   config?: Partial<Omit<RenderConfig, "clips">>
 }
 

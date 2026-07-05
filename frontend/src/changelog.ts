@@ -9,6 +9,22 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "0.8.0",
+    date: "2026-07-05",
+    title: "4K downloads with a quality picker",
+    items: [
+      "YouTube imports now grab the highest resolution available (4K and beyond), downloading the best video and audio streams separately and merging them",
+      "New Downloads section in Settings lets you cap import quality: Best available, 4K, 2K, 1080p, or 720p",
+      "The cap applies to Import, Auto-Mix, and playlist track selections alike",
+      "Mix Editor clips from a set now show the song title from the tracklist instead of the file name",
+      "Rendered mixes are named after the source video plus the date and time (no overlaps), with a Settings option for timestamp-only names",
+      "Drops already added to the mix are highlighted again in the track list (green row with a check)",
+      "Settings controls line up: one control height and consistent label spacing throughout",
+      "Mix Editor panel is more compact with tighter padding around clips",
+      "Delete all mixes in one go from the Mixes panel (with a confirm step)",
+    ],
+  },
+  {
     version: "0.7.0",
     date: "2026-07-05",
     title: "Paste tracklists straight from 1001tracklists",

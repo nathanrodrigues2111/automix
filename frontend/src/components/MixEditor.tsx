@@ -119,7 +119,7 @@ export function MixEditor({
 
   return (
     <Card className="flex h-full flex-col border-border/60 bg-card/40 backdrop-blur">
-      <CardHeader className="space-y-3 pb-3">
+      <CardHeader className="space-y-3 p-4 pb-3">
         <div className="flex items-center justify-between gap-2">
           <CardTitle className="flex shrink-0 items-center gap-2.5 text-base font-semibold tracking-tight">
             <span className="flex h-7 w-7 items-center justify-center rounded-md bg-primary/15 ring-1 ring-primary/30">
@@ -200,7 +200,7 @@ export function MixEditor({
         )}
       </CardHeader>
 
-      <CardContent className="min-w-0 flex-1 space-y-4 overflow-y-auto overflow-x-hidden">
+      <CardContent className="min-w-0 flex-1 space-y-3 overflow-y-auto overflow-x-hidden p-4 pt-0">
         <div className="flex flex-wrap items-center justify-between gap-y-1">
           <div className="shrink-0 whitespace-nowrap text-[11px] font-semibold uppercase tracking-widest text-primary/80">
             Clips · {clips.length}
@@ -387,10 +387,10 @@ function SortableClip({
         <div className="flex items-center justify-between gap-1">
           <div
             className="min-w-0 flex-1 truncate text-sm font-medium leading-tight"
-            title={track?.filename}
+            title={clip.title || track?.filename}
           >
             <span className="text-muted-foreground">{index + 1}.</span>{" "}
-            {track ? displayTitle(track) : "(missing track)"}
+            {clip.title || (track ? displayTitle(track) : "(missing track)")}
           </div>
           <div className="flex shrink-0 gap-0.5">
             <Button

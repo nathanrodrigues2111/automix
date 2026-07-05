@@ -89,6 +89,7 @@ class YouTubeImportRequest(BaseModel):
     url: str
     max_tracks: int | None = None
     video_ids: list[str] | None = None  # subset of playlist entries to import
+    max_height: int | None = None  # download resolution cap; null = best available (4K+)
 
 
 class YouTubeEntriesRequest(BaseModel):
@@ -101,6 +102,7 @@ class AutomixRequest(BaseModel):
     track_ids: list[str] | None = None  # explicit tracks; default = all in videos/
     max_tracks: int | None = None
     video_ids: list[str] | None = None  # subset of playlist entries to use
+    max_height: int | None = None  # download resolution cap; null = best available
     config: dict = Field(default_factory=dict)  # RenderRequest-style overrides
 
 

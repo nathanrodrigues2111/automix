@@ -101,6 +101,7 @@ const DEFAULT_CONFIG: Omit<RenderConfig, "clips"> = {
   show_titles: true, // per-track title overlay
   outro_s: 10, // black outro reserved for YouTube end screens
   resolution: "1080p", // final render canvas
+  filename_style: "file", // exports named after the source video + date/time
   harmonic_pitch_shift_max_semitones: 0, // don't pitch-shift either
 }
 
@@ -427,8 +428,18 @@ export default function App() {
     () => Object.fromEntries((tracks.data ?? []).map((t) => [t.id, t])),
     [tracks.data],
   )
+  // Keyed by kick anchor when present: handleAdd normalizes start_s to the
+  // 2-bar pre-kick lead-in, so the drop's own start_s never matches the
+  // clip's. The kick survives both that normalization and beat nudges.
   const addedKeys = useMemo(
-    () => new Set(clips.map((c) => `${c.track_id}:${c.start_s.toFixed(2)}`)),
+    () =>
+      new Set(
+        clips.map((c) =>
+          c.kick_s != null
+            ? `${c.track_id}:k${c.kick_s.toFixed(2)}`
+            : `${c.track_id}:${c.start_s.toFixed(2)}`,
+        ),
+      ),
     [clips],
   )
   const lastClipBpm = useMemo(() => {

@@ -49,6 +49,8 @@ export function MixesPanel({ progress }: MixesPanelProps) {
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [confirmBatch, setConfirmBatch] = useState(false)
   const batchTimerRef = useRef<number | null>(null)
+  const [confirmAll, setConfirmAll] = useState(false)
+  const allTimerRef = useRef<number | null>(null)
   const [batchBusy, setBatchBusy] = useState(false)
 
   // A finished render/automix job (done + output_path) means a new file in
@@ -103,20 +105,8 @@ export function MixesPanel({ progress }: MixesPanelProps) {
     })
   }
 
-  const handleBatchDelete = async () => {
-    if (!confirmBatch) {
-      setConfirmBatch(true)
-      if (batchTimerRef.current) window.clearTimeout(batchTimerRef.current)
-      batchTimerRef.current = window.setTimeout(
-        () => setConfirmBatch(false),
-        4000,
-      )
-      return
-    }
-    if (batchTimerRef.current) window.clearTimeout(batchTimerRef.current)
-    setConfirmBatch(false)
+  const deleteFiles = async (files: string[]) => {
     setBatchBusy(true)
-    const files = [...selected]
     const results = await Promise.allSettled(
       files.map((f) => deleteMix.mutateAsync(f)),
     )
@@ -134,6 +124,33 @@ export function MixesPanel({ progress }: MixesPanelProps) {
     setSelectMode(false)
     setActiveFile((f) => (f && files.includes(f) ? null : f))
     qc.invalidateQueries({ queryKey: ["mixes"] })
+  }
+
+  const handleBatchDelete = async () => {
+    if (!confirmBatch) {
+      setConfirmBatch(true)
+      if (batchTimerRef.current) window.clearTimeout(batchTimerRef.current)
+      batchTimerRef.current = window.setTimeout(
+        () => setConfirmBatch(false),
+        4000,
+      )
+      return
+    }
+    if (batchTimerRef.current) window.clearTimeout(batchTimerRef.current)
+    setConfirmBatch(false)
+    await deleteFiles([...selected])
+  }
+
+  const handleDeleteAll = async () => {
+    if (!confirmAll) {
+      setConfirmAll(true)
+      if (allTimerRef.current) window.clearTimeout(allTimerRef.current)
+      allTimerRef.current = window.setTimeout(() => setConfirmAll(false), 4000)
+      return
+    }
+    if (allTimerRef.current) window.clearTimeout(allTimerRef.current)
+    setConfirmAll(false)
+    await deleteFiles(items.map((m) => m.filename))
   }
 
   return (
@@ -207,6 +224,27 @@ export function MixesPanel({ progress }: MixesPanelProps) {
                   {confirmBatch
                     ? `Really delete ${selected.size}?`
                     : `Delete selected (${selected.size})`}
+                </Button>
+              )}
+              {!selectMode && (
+                <Button
+                  variant={confirmAll ? "destructive" : "ghost"}
+                  size="sm"
+                  disabled={batchBusy}
+                  onClick={handleDeleteAll}
+                  className={cn(
+                    "h-7 text-xs",
+                    !confirmAll && "text-muted-foreground hover:text-destructive",
+                  )}
+                >
+                  {batchBusy ? (
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                  ) : (
+                    <Trash2 className="h-3 w-3" />
+                  )}
+                  {confirmAll
+                    ? `Really delete all ${items.length}?`
+                    : "Delete all"}
                 </Button>
               )}
             </div>

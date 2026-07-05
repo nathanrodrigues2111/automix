@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import os
+import random
 import re
 import shutil
 import subprocess
@@ -814,6 +815,29 @@ def _display_title(src: Path) -> str:
     if meta and meta.get("title"):
         return meta["title"]
     return youtube_mod.clean_title(src.stem)
+
+
+def _export_path(clips: list[dict], srcs: list[Path], config: dict) -> Path:
+    """Final export path. Default style names the file after the first
+    source video's file name plus the local date and time so repeated
+    renders never overlap (automix_<Video_Name>_20260705_1731.mp4); the
+    "timestamp" style keeps the old automix_<UTC timestamp>.mp4. The
+    automix_ prefix is REQUIRED — main.py tells exports from imports by it.
+    """
+    style = str(config.get("filename_style", "file"))
+    if style != "timestamp" and srcs:
+        stem = re.sub(r"\s*\[[A-Za-z0-9_-]{8,12}\]\s*$", "", srcs[0].stem)
+        slug = re.sub(r"[^A-Za-z0-9]+", "_", stem).strip("_")[:48]
+        if slug:
+            local_ts = datetime.now().strftime("%Y%m%d_%H%M")
+            cand = EXPORTS_DIR / f"automix_{slug}_{local_ts}.mp4"
+            while cand.exists():
+                cand = EXPORTS_DIR / (
+                    f"automix_{slug}_{local_ts}_{random.randint(10, 99)}.mp4"
+                )
+            return cand
+    ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    return EXPORTS_DIR / f"automix_{ts}.mp4"
 
 
 def _apply_branding(
@@ -1708,9 +1732,8 @@ def render_mix(
             pass
 
     _check_cancel()
-    ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    out_path = EXPORTS_DIR / f"automix_{ts}.mp4"
     EXPORTS_DIR.mkdir(parents=True, exist_ok=True)
+    out_path = _export_path(clips, srcs, config)
     windows: list[tuple[str, float, float]] = []
     # VIDEO-ONLY passes first (branding, intro overlay); the audio joins in
     # exactly ONE mux at the end. Every extra "-c:a copy" hop through an mp4

@@ -38,6 +38,7 @@ import {
 import type { PlaylistEntry } from "@/api/types"
 import type { ProgressMap } from "@/hooks/useProgressSocket"
 import { formatDuration } from "@/lib/format"
+import { loadDownloadMaxHeight } from "@/lib/downloadQuality"
 import { cn } from "@/lib/utils"
 
 type JobKind = "automix" | "import"
@@ -176,7 +177,7 @@ export function AutomixPanel({ progress, variant = "card" }: AutomixPanelProps) 
     const u = validateUrl()
     if (!u) return
     automix.mutate(
-      { url: u, max_tracks: parsedMaxTracks() },
+      { url: u, max_tracks: parsedMaxTracks(), max_height: loadDownloadMaxHeight() },
       {
         onSuccess: (res) => setJob({ id: res.job_id, kind: "automix" }),
         onError: (e) => toast.error(`Auto-Mix failed: ${e.message}`),
@@ -188,7 +189,7 @@ export function AutomixPanel({ progress, variant = "card" }: AutomixPanelProps) 
     const u = validateUrl()
     if (!u) return
     youtubeImport.mutate(
-      { url: u, max_tracks: parsedMaxTracks() },
+      { url: u, max_tracks: parsedMaxTracks(), max_height: loadDownloadMaxHeight() },
       {
         onSuccess: (res) => setJob({ id: res.job_id, kind: "import" }),
         onError: (e) => toast.error(`Import failed: ${e.message}`),
@@ -240,7 +241,12 @@ export function AutomixPanel({ progress, variant = "card" }: AutomixPanelProps) 
     const ids = wholePlaylist ? null : [...selectedIds]
     if (!u || (ids !== null && ids.length === 0)) return
     setChooserOpen(false)
-    const body = { url: u, max_tracks: null, video_ids: ids }
+    const body = {
+      url: u,
+      max_tracks: null,
+      video_ids: ids,
+      max_height: loadDownloadMaxHeight(),
+    }
     if (kind === "automix") {
       automix.mutate(body, {
         onSuccess: (res) => setJob({ id: res.job_id, kind: "automix" }),

@@ -877,7 +877,13 @@ export function TrackList({
                           const badgeRole =
                             role ?? (d.primary ? "main" : "alt")
                           const dropKey = `${t.id}:${d.start_s.toFixed(2)}`
-                          const isAdded = !!addedKeys?.has(dropKey)
+                          // Mirrors addedKeys in App: kick-anchored when the
+                          // drop has one, start-based otherwise.
+                          const addKey =
+                            d.kick_s != null
+                              ? `${t.id}:k${d.kick_s.toFixed(2)}`
+                              : dropKey
+                          const isAdded = !!addedKeys?.has(addKey)
                           const isPlayingThis = playingKey === dropKey
                           return (
                             <li

@@ -28,6 +28,11 @@ import { Switch } from "@/components/ui/switch"
 import { cn } from "@/lib/utils"
 import { setThemePref, useThemePref, type ThemePref } from "@/lib/theme"
 import { ACCENTS, isPresetAccent, loadAccent, setAccent } from "@/lib/accent"
+import {
+  DOWNLOAD_QUALITIES,
+  loadDownloadMaxHeight,
+  setDownloadMaxHeight,
+} from "@/lib/downloadQuality"
 import { defaultApiBase, loadApiBase, setApiBase } from "@/lib/backend"
 import { APP_VERSION, CHANGELOG } from "@/changelog"
 import type { RenderConfig } from "@/api/types"
@@ -73,6 +78,9 @@ export function SettingsDialog({
   const [accent, setAccentState] = useState<string | null>(() => loadAccent())
   const [changelogOpen, setChangelogOpen] = useState(false)
   const [apiBase, setApiBaseState] = useState<string>(() => loadApiBase())
+  const [downloadHeight, setDownloadHeight] = useState<number | null>(() =>
+    loadDownloadMaxHeight(),
+  )
   const [legalOpen, setLegalOpen] = useState(false)
 
   return (
@@ -208,7 +216,7 @@ export function SettingsDialog({
               onChange={(v) => setConfig({ ...config, no_time_stretch: v })}
             />
 
-            <div className={cn("space-y-2", nativeBpm && "opacity-50")}>
+            <div className={cn("space-y-3", nativeBpm && "opacity-50")}>
               <Label className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
                 Target BPM{nativeBpm ? " · off while native BPM is on" : ""}
               </Label>
@@ -222,7 +230,7 @@ export function SettingsDialog({
                   }}
                   disabled={nativeBpm}
                 >
-                  <SelectTrigger className="h-9 flex-1">
+                  <SelectTrigger className="flex-1">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -243,7 +251,7 @@ export function SettingsDialog({
                     if (!Number.isFinite(v)) return
                     setConfig({ ...config, target_bpm: v })
                   }}
-                  className="h-9 w-24"
+                  className="w-24"
                   aria-label="Target BPM"
                 />
               </div>
@@ -309,7 +317,7 @@ export function SettingsDialog({
                 onChange={(v) => setConfig({ ...config, video_cut_fade: v })}
               />
               {(config.video_cut_fade ?? true) && (
-                <div className="space-y-2 pl-1">
+                <div className="space-y-3 pl-1">
                   <Label className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
                     Transition style
                   </Label>
@@ -319,7 +327,7 @@ export function SettingsDialog({
                       setConfig({ ...config, video_transition: v })
                     }
                   >
-                    <SelectTrigger className="h-8 bg-background/60 text-xs">
+                    <SelectTrigger className="bg-background/60 text-xs">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
@@ -352,7 +360,7 @@ export function SettingsDialog({
 
           <section className="space-y-3">
             <SectionLabel>Output</SectionLabel>
-            <div className="space-y-2">
+            <div className="space-y-3">
               <Label className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
                 Resolution
               </Label>
@@ -360,7 +368,7 @@ export function SettingsDialog({
                 value={config.resolution ?? "1080p"}
                 onValueChange={(v) => setConfig({ ...config, resolution: v })}
               >
-                <SelectTrigger className="h-8 bg-background/60 text-xs">
+                <SelectTrigger className="bg-background/60 text-xs">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -369,6 +377,34 @@ export function SettingsDialog({
                   <SelectItem value="1080p">1080p (Full HD)</SelectItem>
                   <SelectItem value="1440p">1440p (2K)</SelectItem>
                   <SelectItem value="2160p">2160p (4K)</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-3">
+              <Label className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+                File name
+              </Label>
+              <Select
+                value={
+                  (config.filename_style ?? "file") === "timestamp"
+                    ? "timestamp"
+                    : "file"
+                }
+                onValueChange={(v) =>
+                  setConfig({ ...config, filename_style: v })
+                }
+              >
+                <SelectTrigger className="bg-background/60 text-xs">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="file">
+                    Video name + date (automix_Video_Name_20260705_1731.mp4)
+                  </SelectItem>
+                  <SelectItem value="timestamp">
+                    Date and time only (automix_20260705T104356Z.mp4)
+                  </SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -389,6 +425,43 @@ export function SettingsDialog({
 
           <Separator className="bg-border/50" />
 
+          <section className="space-y-3">
+            <SectionLabel>Downloads</SectionLabel>
+            <div className="space-y-3">
+              <Label className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+                YouTube import quality
+              </Label>
+              <Select
+                value={downloadHeight === null ? "best" : String(downloadHeight)}
+                onValueChange={(v) => {
+                  const h = v === "best" ? null : parseInt(v, 10)
+                  setDownloadHeight(h)
+                  setDownloadMaxHeight(h)
+                }}
+              >
+                <SelectTrigger className="bg-background/60 text-xs">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {DOWNLOAD_QUALITIES.map((q) => (
+                    <SelectItem
+                      key={q.label}
+                      value={q.height === null ? "best" : String(q.height)}
+                    >
+                      {q.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-[11px] leading-relaxed text-muted-foreground">
+                Highest video and audio streams are downloaded separately and
+                merged. Applies to the next import.
+              </p>
+            </div>
+          </section>
+
+          <Separator className="bg-border/50" />
+
           <section className="space-y-3 pb-2">
             <SectionLabel>Playback</SectionLabel>
             <SwitchRow
@@ -402,7 +475,7 @@ export function SettingsDialog({
 
           <section className="space-y-3">
             <SectionLabel>Connection</SectionLabel>
-            <div className="space-y-2">
+            <div className="space-y-3">
               <Label className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
                 Backend URL
               </Label>
@@ -417,7 +490,7 @@ export function SettingsDialog({
                 }}
                 placeholder={defaultApiBase() || "same origin"}
                 spellCheck={false}
-                className="h-8 bg-background/60 font-mono text-xs"
+                className="bg-background/60 font-mono text-xs"
               />
               <p className="text-[11px] leading-relaxed text-muted-foreground/80">
                 Where the Automix backend runs. Leave as http://localhost:8000

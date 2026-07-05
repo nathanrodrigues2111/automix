@@ -17,14 +17,14 @@ message). This has bitten repeatedly. Before editing anything in
 
 - Backend: FastAPI on :8000 (`backend/`, run with `uv run uvicorn main:app --reload` from `backend/`). Usually already running with hot reload.
 - Frontend: Vite dev server on :5173 (`frontend/`, `npm run dev`), proxies `/api`, `/videos`, `/ws` to :8000. Usually already running.
-- Environment: no sudo. ffmpeg / yt-dlp / uv live in `~/.local/bin`. Lite analysis mode (no torch; allin1/demucs not installed — librosa fallback everywhere). This ffmpeg build has NO drawtext; titles are burned with libass (`ass` filter + `fontsdir=assets`).
+- Environment: no sudo. ffmpeg / yt-dlp / uv live in `~/.local/bin`. Lite analysis mode (no torch; allin1/demucs not installed — librosa fallback everywhere). This ffmpeg build has NO drawtext; titles are burned with libass (`ass` filter + `fontsdir=assets/fonts`).
 - Backend tests: `cd backend && uv run pytest tests/ -q`. The golden-truth detection tests skip when videos are missing.
 
 ## Layout
 
 - `videos/imports/` downloaded source tracks; `videos/exports/` rendered `automix_*.mp4`. Whole `videos/` is gitignored.
 - `backend/.cache/`: `wavs/` (analysis WAVs keyed by file hash), `stems/`, `waveforms/`, `previews/` (live-preview clip WAVs, suffix `_n14` = loudnorm -14), `renders/` (temp workdirs).
-- `assets/`: `Bebas-Regular.ttf` (title font, family name "Bebas", caps-only), `edmpapa11.png` (FULL-FRAME 1920x1080 brand overlay: opaque bars + wordmark, transparent middle, composited 1:1), `black-bars.png` (bars only, shown during the intro), `into.avi` (intro animation, 3.0s, 4096x2304 BGRA raw, **2.7GB, gitignored** — web transcode lives at `frontend/public/intro.mp4`).
+- `assets/`: `fonts/` (selectable title fonts — built-ins `BebasNeue-Regular.ttf` (family "Bebas Neue", the default) + `Cubano.ttf`, plus gitignored user uploads via Settings → Output → Title font / `POST /api/fonts`; render picks via config `title_font` = file stem), `edmpapa11.png` (FULL-FRAME 1920x1080 brand overlay: opaque bars + wordmark, transparent middle, composited 1:1), `black-bars.png` (bars only, shown during the intro), `into.avi` (intro animation, 3.0s, 4096x2304 BGRA raw, **2.7GB, gitignored** — web transcode lives at `frontend/public/intro.mp4`).
 - **CRITICAL**: `analysis.file_hash()` is PATH-based (path+size). Moving a video file orphans its analysis/titles. `db.rekey_file_hash()` + the startup migration in `main.py` handle known moves — re-key rather than re-analyze.
 
 ## Audio pipeline (the hard-won parts)

@@ -81,8 +81,15 @@ class RenderRequest(BaseModel):
     no_time_stretch: bool = False  # drops-only fast path: trim+concat each source, no BPM matching
     brand_overlay: bool = True  # EDMPAPA letterbox bars + logo pass
     show_titles: bool = True  # per-clip track title in the bottom bar
+    title_font: str | None = None  # font id from assets/fonts (null = default)
     outro_s: float = 10.0  # black+silent tail for YouTube end screens (0 = off)
     resolution: str = "1080p"  # 480p | 720p | 1080p | 1440p | 2160p
+    video_cut: bool = True  # cut video on clip boundaries
+    video_cut_fade: bool = True  # soften each hard video cut with a 0.25s blend
+    video_transition: str = "fade"  # xfade style at cuts ("variety" = cycle)
+    filename_style: str = "file"  # "file" (source name + date) | "timestamp"
+    drop_bars: float = 0.0  # force every drop clip to N bars (0 = auto)
+    make_short: bool = True  # companion vertical Short of the first drop
 
 
 class YouTubeImportRequest(BaseModel):

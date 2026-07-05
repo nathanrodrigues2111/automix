@@ -9,7 +9,15 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi import (
+    FastAPI,
+    File,
+    HTTPException,
+    Request,
+    UploadFile,
+    WebSocket,
+    WebSocketDisconnect,
+)
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -566,6 +574,47 @@ async def post_render(req: schemas.RenderRequest) -> dict:
     # output_path is unknown until render finishes; UI must read it from the
     # final WS progress message (which carries `output_path`).
     return {"job_id": job_id, "output_path": None}
+
+
+# ---------- Title fonts ----------
+
+
+@app.get("/api/fonts")
+def get_fonts() -> dict:
+    """Selectable title fonts (assets/fonts: built-ins + uploads)."""
+    return {"fonts": render_mod.list_fonts(), "default": render_mod.DEFAULT_FONT_ID}
+
+
+@app.post("/api/fonts")
+async def upload_font(file: UploadFile = File(...)) -> dict:
+    """Add a custom title font. Re-uploading the same file name replaces it."""
+    name = Path(file.filename or "").name
+    ext = Path(name).suffix.lower()
+    if ext not in (".ttf", ".otf"):
+        raise HTTPException(status_code=400, detail="Only .ttf and .otf fonts are supported")
+    data = await file.read()
+    if len(data) > 20 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="Font file is too large (20 MB max)")
+    stem = re.sub(r"[^A-Za-z0-9._ -]+", "_", Path(name).stem).strip(" ._") or "font"
+    render_mod.FONTS_DIR.mkdir(parents=True, exist_ok=True)
+    dest = render_mod.FONTS_DIR / f"{stem}{ext}"
+    dest.write_bytes(data)
+    family = render_mod.font_family(dest)
+    if not family:
+        dest.unlink(missing_ok=True)
+        raise HTTPException(status_code=400, detail="Not a readable font file")
+    return {"id": dest.stem, "family": family, "file": dest.name}
+
+
+@app.get("/api/fonts/{font_id}/file")
+def get_font_file(font_id: str) -> FileResponse:
+    """Raw font file, for the in-browser preview to match the render."""
+    for f in render_mod.list_fonts():
+        if f["id"] == font_id:
+            path = render_mod.FONTS_DIR / f["file"]
+            media = "font/otf" if path.suffix.lower() == ".otf" else "font/ttf"
+            return FileResponse(str(path), media_type=media)
+    raise HTTPException(status_code=404, detail="font not found")
 
 
 @app.post("/api/youtube/import")

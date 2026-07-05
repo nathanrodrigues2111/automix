@@ -8,6 +8,8 @@ import type {
   PlaylistEntry,
   AutomixRequest,
   DeleteResponse,
+  FontInfo,
+  FontsResponse,
   JobResponse,
   MixRecord,
   ModelsStatus,
@@ -83,6 +85,42 @@ export function useRender() {
         method: "POST",
         body: JSON.stringify(body),
       }),
+  })
+}
+
+export function useFonts() {
+  return useQuery({
+    queryKey: ["fonts"],
+    queryFn: () => http<FontsResponse>("/api/fonts"),
+    refetchOnWindowFocus: false,
+    staleTime: Infinity,
+  })
+}
+
+export function useUploadFont() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async (file: File) => {
+      const body = new FormData()
+      body.append("file", file)
+      // No JSON Content-Type here: the browser sets the multipart boundary.
+      const res = await fetch(apiUrl("/api/fonts"), { method: "POST", body })
+      if (!res.ok) {
+        let detail = ""
+        try {
+          detail = await res.text()
+        } catch {
+          // ignore
+        }
+        throw new Error(
+          `${res.status} ${res.statusText}${detail ? `: ${detail}` : ""}`,
+        )
+      }
+      return (await res.json()) as FontInfo
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["fonts"] })
+    },
   })
 }
 

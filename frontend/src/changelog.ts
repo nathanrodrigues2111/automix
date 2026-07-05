@@ -9,6 +9,18 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "0.9.0",
+    date: "2026-07-05",
+    title: "Pick your title font, or upload your own",
+    items: [
+      "New Title font setting in Settings > Output: choose the font used for the track titles burned into the video and the Short",
+      "Bebas Neue is the new default title font; Cubano ships as an alternative",
+      "Upload any TTF or OTF font file and it joins the list, ready to use in the next render",
+      "The live preview shows titles in the selected font, matching the final render",
+      "Manual renders now honor the Short, file name, drop length, and video cut settings (they were silently ignored before)",
+    ],
+  },
+  {
     version: "0.8.0",
     date: "2026-07-05",
     title: "4K downloads with a quality picker",

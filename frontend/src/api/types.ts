@@ -93,6 +93,8 @@ export interface RenderConfig {
   video_transition?: string
   /** Per-track title overlay on the final render. */
   show_titles?: boolean
+  /** Title font id (file stem in assets/fonts; see /api/fonts). */
+  title_font?: string | null
   /** Black+silent tail reserved for YouTube end screens (seconds, 0 = off). */
   outro_s?: number
   /** Output canvas: "480p" | "720p" | "1080p" | "1440p" | "2160p". */
@@ -105,6 +107,19 @@ export interface RenderConfig {
   make_short?: boolean
   harmonic_pitch_shift_max_semitones: number
   proxy?: boolean
+}
+
+export interface FontInfo {
+  /** File stem — the value stored in RenderConfig.title_font. */
+  id: string
+  /** Font family name (what CSS and libass match on). */
+  family: string
+  file: string
+}
+
+export interface FontsResponse {
+  fonts: FontInfo[]
+  default: string
 }
 
 export interface MixRecord {

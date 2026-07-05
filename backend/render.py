@@ -31,7 +31,8 @@ RENDER_TMP_DIR = BACKEND_DIR / ".cache" / "renders"
 ASSETS_DIR = PROJECT_ROOT / "assets"
 LOGO_PATH = ASSETS_DIR / "edmpapa11.png"
 BARS_PATH = ASSETS_DIR / "black-bars.png"
-FONT_PATH = ASSETS_DIR / "Bebas-Regular.ttf"
+FONTS_DIR = ASSETS_DIR / "fonts"
+DEFAULT_FONT_ID = "BebasNeue-Regular"
 
 # EDMPAPA branding geometry (1920x1080 canvas).
 _BRAND_W = 1920
@@ -42,6 +43,48 @@ _TITLE_FONT_SIZE = 56
 _LOGO_MARGIN_RIGHT = 48
 
 ProgressCb = Callable[[str, float, str], None] | None
+
+
+def font_family(path: Path) -> str | None:
+    """Family name from the font's name table (what libass matches Style
+    Fontname against). None if the file isn't a parseable font."""
+    try:
+        from fontTools.ttLib import TTFont
+
+        f = TTFont(str(path), lazy=True)
+        name = f["name"].getDebugName(1)
+        f.close()
+        return str(name) if name else path.stem
+    except Exception:
+        return None
+
+
+def list_fonts() -> list[dict[str, str]]:
+    """Selectable title fonts: every .ttf/.otf in assets/fonts (built-ins
+    plus user uploads)."""
+    fonts: list[dict[str, str]] = []
+    if FONTS_DIR.is_dir():
+        for p in sorted(FONTS_DIR.iterdir(), key=lambda q: q.name.lower()):
+            if p.suffix.lower() not in (".ttf", ".otf"):
+                continue
+            fam = font_family(p)
+            if fam:
+                fonts.append({"id": p.stem, "family": fam, "file": p.name})
+    return fonts
+
+
+def resolve_title_font(font_id: str | None) -> tuple[Path, str] | None:
+    """(path, family) for a font id (file stem in assets/fonts). Unknown or
+    missing ids fall back to the default font, then to any available one."""
+    fonts = {f["id"]: f for f in list_fonts()}
+    for fid in (str(font_id or "").strip() or DEFAULT_FONT_ID, DEFAULT_FONT_ID):
+        f = fonts.get(fid)
+        if f:
+            return FONTS_DIR / f["file"], f["family"]
+    if fonts:
+        f = next(iter(fonts.values()))
+        return FONTS_DIR / f["file"], f["family"]
+    return None
 
 
 def _has_rubberband() -> bool:
@@ -596,18 +639,18 @@ _TITLE_MIN_FONT = 40           # below this a single line becomes unreadable
 _TITLE_TWO_LINE_FONT = 44      # cap when wrapping to two lines
 _TITLE_TWO_LINE_MIN = 34
 
-_font_metrics_cache: dict[str, Any] | None = None
+_font_metrics_cache: dict[str, dict[str, Any] | None] = {}
 
 
-def _font_metrics() -> dict[str, Any] | None:
-    """Advance widths of the title font, for exact text measurement."""
-    global _font_metrics_cache
-    if _font_metrics_cache is not None:
-        return _font_metrics_cache
+def _font_metrics(font_path: Path) -> dict[str, Any] | None:
+    """Advance widths of a title font, for exact text measurement."""
+    key = str(font_path)
+    if key in _font_metrics_cache:
+        return _font_metrics_cache[key]
     try:
         from fontTools.ttLib import TTFont
 
-        f = TTFont(str(FONT_PATH), lazy=True)
+        f = TTFont(str(font_path), lazy=True)
         upem = float(f["head"].unitsPerEm)
         hmtx = f["hmtx"]
         cmap = f.getBestCmap()
@@ -616,21 +659,21 @@ def _font_metrics() -> dict[str, Any] | None:
         # libass (like VSFilter/GDI) maps ASS Fontsize to the font's cell
         # height (usWinAscent + usWinDescent), not to unitsPerEm.
         cell = float(os2.usWinAscent + os2.usWinDescent) or upem
-        _font_metrics_cache = {
+        _font_metrics_cache[key] = {
             "upem": upem,
             "widths": widths,
             "default": widths.get(ord("H"), upem * 0.5),
             "scale": upem / cell,
         }
     except Exception:
-        _font_metrics_cache = None
-    return _font_metrics_cache
+        _font_metrics_cache[key] = None
+    return _font_metrics_cache[key]
 
 
-def _text_width_px(text: str, font_size: float) -> float:
+def _text_width_px(text: str, font_size: float, font_path: Path) -> float:
     """Rendered pixel width of `text` at ASS Fontsize `font_size` (PlayRes
     pixels). Falls back to a Bebas-ish heuristic if fontTools is missing."""
-    m = _font_metrics()
+    m = _font_metrics(font_path)
     if not m:
         return len(text) * font_size * 0.48
     units = sum(m["widths"].get(ord(ch), m["default"]) for ch in text)
@@ -683,14 +726,19 @@ def _shorten_title_steps(title: str) -> list[str]:
     return steps
 
 
-def fit_title(title: str, max_w: int = _TITLE_MAX_W, base_size: int = _TITLE_FONT_SIZE) -> tuple[list[str], int]:
+def fit_title(
+    title: str,
+    font_path: Path,
+    max_w: int = _TITLE_MAX_W,
+    base_size: int = _TITLE_FONT_SIZE,
+) -> tuple[list[str], int]:
     """Fit a title inside `max_w`: full text at the base size when possible,
     then progressively shortened (identity-preserving), then scaled down,
     then wrapped to two lines. Returns (lines, font_size); measurement is on
     the uppercased text exactly as the caps-only style renders it."""
 
     def _w(s: str, size: float) -> float:
-        return _text_width_px(s.upper(), size)
+        return _text_width_px(s.upper(), size, font_path)
 
     if _w(title, base_size) <= max_w:
         return [title], base_size
@@ -757,11 +805,16 @@ def _ass_time(t: float) -> str:
     return f"{h}:{m:02d}:{s:05.2f}"
 
 
-def _write_title_ass(title_windows: list[tuple[str, float, float]], out_ass: Path) -> None:
+def _write_title_ass(
+    title_windows: list[tuple[str, float, float]],
+    out_ass: Path,
+    font_path: Path,
+    font_fam: str,
+) -> None:
     """Build an ASS subtitle file with one centered title per window, anchored
     in the middle of the bottom letterbox bar. Rendered with the libass `ass`
-    filter (this ffmpeg build has no drawtext) using fontsdir=ASSETS_DIR so
-    Cubano.ttf needs no system install."""
+    filter (this ffmpeg build has no drawtext) using fontsdir=assets/fonts so
+    no font needs a system install."""
     y_center = _BRAND_H - _BAR_H // 2  # vertical center of the bottom bar
     lines = [
         "[Script Info]",
@@ -776,7 +829,7 @@ def _write_title_ass(title_windows: list[tuple[str, float, float]], out_ass: Pat
         "OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, "
         "ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, "
         "Alignment, MarginL, MarginR, MarginV, Encoding",
-        f"Style: Title,Bebas,{_TITLE_FONT_SIZE},&H00FFFFFF,&H00FFFFFF,"
+        f"Style: Title,{font_fam},{_TITLE_FONT_SIZE},&H00FFFFFF,&H00FFFFFF,"
         "&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,0,0,5,0,0,0,1",
         "",
         "[Events]",
@@ -798,7 +851,7 @@ def _write_title_ass(title_windows: list[tuple[str, float, float]], out_ass: Pat
         title = _ascii_fold(title)
         # Fit inside the safe width: shorten (identity-preserving), scale,
         # or wrap to two lines — a raw long title would run off-frame.
-        fit_lines, font_size = fit_title(title)
+        fit_lines, font_size = fit_title(title, font_path)
         txt = "\\N".join(_ass_escape(ln.upper()) for ln in fit_lines)
         size_tag = f"\\fs{font_size}" if font_size != _TITLE_FONT_SIZE else ""
         lines.append(
@@ -868,11 +921,12 @@ def _short_titles_ass(
     dur: float,
     card_start: float,
     out_ass: Path,
+    font_fam: str,
 ) -> None:
     """Per-drop centered lines: artist in the top bar, track name in the
     bottom bar, switching with the mix's title windows; then the end-card
-    line centered on black. Bebas is caps-only; long lines scale down to
-    stay inside the bar width."""
+    line centered on black. Titles render caps-only; long lines scale down
+    to stay inside the bar width."""
     max_w = _SHORT_VID_W - 60
 
     def _fs(text: str, base: int = 104) -> int:
@@ -901,7 +955,7 @@ def _short_titles_ass(
         "BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, "
         "Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, "
         "MarginR, MarginV, Encoding",
-        "Style: Short,Bebas,88,&H00FFFFFF,&H00000000,&H00000000,0,0,0,0,"
+        f"Style: Short,{font_fam},88,&H00FFFFFF,&H00000000,&H00000000,0,0,0,0,"
         "100,100,1,0,1,0,0,5,10,10,10,1",
         "",
         "[Events]",
@@ -948,6 +1002,7 @@ def _render_short(
     main_out: Path,
     work: Path,
     progress: ProgressCb = None,
+    title_font: tuple[Path, str] | None = None,
 ) -> Path | None:
     """Vertical Short reframing the rendered mix itself: the first minute of
     the beat-matched mix (as many drops as fit), blurred + darkened behind a
@@ -967,8 +1022,10 @@ def _render_short(
     if progress:
         progress("render", 98.0, "Rendering Short")
 
+    font = title_font or resolve_title_font(None)
+    fonts_dir = font[0].parent if font else FONTS_DIR
     ass_path = work / "short_titles.ass"
-    _short_titles_ass(windows, dur, card_start, ass_path)
+    _short_titles_ass(windows, dur, card_start, ass_path, font[1] if font else "Bebas Neue")
 
     bar_bot_y = _SHORT_VID_Y + _SHORT_VID_H
     out_path = main_out.with_name(main_out.stem + "_short.mp4")
@@ -984,7 +1041,7 @@ def _render_short(
         f"tpad=stop=-1:stop_mode=add:color=black,"
         f"drawbox=x={_SHORT_INSET_X}:y={_SHORT_WIN_TOP}:w={_SHORT_VID_W}:h={_SHORT_BAR_H}:color=black:t=fill,"
         f"drawbox=x={_SHORT_INSET_X}:y={bar_bot_y}:w={_SHORT_VID_W}:h={_SHORT_BAR_H}:color=black:t=fill,"
-        f"ass=filename='{ass_path}':fontsdir='{ASSETS_DIR}',setsar=1,format=gbrp[base];"
+        f"ass=filename='{ass_path}':fontsdir='{fonts_dir}',setsar=1,format=gbrp[base];"
         f"[1:v]fps=30,scale={_SHORT_W}:{_SHORT_H},setsar=1,format=gbrp[tpl];"
         f"[base][tpl]blend=all_mode=screen,format=yuv420p[v];"
         # Audio fades out into the card and pads silent underneath it.
@@ -1019,17 +1076,19 @@ def _apply_branding(
     brand_start: float = 0.0,
     canvas: tuple[int, int] | None = None,
     intermediate: bool = False,
+    title_font: tuple[Path, str] | None = None,
 ) -> None:
     """EDMPAPA branding pass: crop-fill to 1920x1080, draw black letterbox
     bars OVER the video (top+bottom, 140px), overlay the logo in the top bar
     and render one title per (title, start_s, end_s) window in the bottom bar
     (via a libass subtitle track — this ffmpeg build ships without drawtext)."""
     have_logo = LOGO_PATH.exists()
-    have_font = FONT_PATH.exists()
+    font = title_font or resolve_title_font(None)
+    have_font = font is not None and font[0].exists()
     if not have_logo:
         print(f"[render] branding: logo missing at {LOGO_PATH}, skipping logo")
     if not have_font and title_windows:
-        print(f"[render] branding: font missing at {FONT_PATH}, skipping titles")
+        print(f"[render] branding: no title font in {FONTS_DIR}, skipping titles")
 
     bw, bh = canvas or (_BRAND_W, _BRAND_H)
     k = bh / float(_BRAND_H)
@@ -1087,10 +1146,11 @@ def _apply_branding(
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="brand_") as tmp:
         if have_font and title_windows:
+            assert font is not None
             ass_path = Path(tmp) / "titles.ass"
-            _write_title_ass(title_windows, ass_path)
+            _write_title_ass(title_windows, ass_path, font[0], font[1])
             filters.append(
-                f"[{label}]ass=filename='{ass_path}':fontsdir='{ASSETS_DIR}'[titled]"
+                f"[{label}]ass=filename='{ass_path}':fontsdir='{font[0].parent}'[titled]"
             )
             label = "titled"
 
@@ -1440,6 +1500,7 @@ def render_mix(
     max_pitch_st = float(config.get("harmonic_pitch_shift_max_semitones", 2.0))
     brand_overlay = bool(config.get("brand_overlay", True))
     show_titles = bool(config.get("show_titles", True))
+    title_font = resolve_title_font(config.get("title_font"))
 
     # When no_time_stretch is on, force the per-clip stretch ratio to 1.0.
     # Each clip plays at its native BPM (no setpts on video, no rubberband on
@@ -1946,6 +2007,7 @@ def render_mix(
             brand_start=first_kick_out if intro_dur > 0 else 0.0,
             canvas=canvas,
             intermediate=intro_dur > 0 and first_kick_out > 0,
+            title_font=title_font,
         )
         video_final = branded
 
@@ -2066,7 +2128,7 @@ def render_mix(
             short_windows = [(titles[i], s, e) for i, (s, e) in enumerate(spans)]
             short_path = _render_short(
                 concat_video, final_audio, short_windows, mix_len,
-                out_path, work, progress,
+                out_path, work, progress, title_font=title_font,
             )
             if short_path is not None:
                 record["short_path"] = str(short_path.relative_to(PROJECT_ROOT))

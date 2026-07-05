@@ -29,7 +29,8 @@ import { ProjectManager } from "@/components/ProjectManager"
 import { RenderDialog } from "@/components/RenderDialog"
 import { SettingsDialog } from "@/components/SettingsDialog"
 import { Tour, type TourStep } from "@/components/Tour"
-import { useRefreshTitles, useTracks } from "@/api/client"
+import { useFonts, useRefreshTitles, useTracks } from "@/api/client"
+import { ensureFontLoaded } from "@/lib/fonts"
 import type { Drop, Project, RenderConfig, Track } from "@/api/types"
 import { useLivePreview } from "@/hooks/useLivePreview"
 import { useProgressSocket } from "@/hooks/useProgressSocket"
@@ -99,6 +100,7 @@ const DEFAULT_CONFIG: Omit<RenderConfig, "clips"> = {
   brand_overlay: true, // EDMPAPA black bars + logo
   video_cut_fade: true, // quick 0.25s blend on each video cut
   show_titles: true, // per-track title overlay
+  title_font: "BebasNeue-Regular", // burned-in title font (see Settings)
   outro_s: 10, // black outro reserved for YouTube end screens
   resolution: "1080p", // final render canvas
   filename_style: "file", // exports named after the source video + date/time
@@ -214,6 +216,21 @@ export default function App() {
   const [loopPreviews, setLoopPreviews] = useState<boolean>(
     () => loadStoredSettings().loopPreviews ?? true,
   )
+
+  // Selected title font: load it into the document so the preview title
+  // renders with the exact font the mix will be burned with.
+  const fonts = useFonts()
+  const titleFont = useMemo(() => {
+    const list = fonts.data?.fonts ?? []
+    return (
+      list.find((f) => f.id === (config.title_font ?? fonts.data?.default)) ??
+      list.find((f) => f.id === fonts.data?.default) ??
+      null
+    )
+  }, [fonts.data, config.title_font])
+  useEffect(() => {
+    if (titleFont) void ensureFontLoaded(titleFont).catch(() => {})
+  }, [titleFont])
 
   // Persist tuning settings across reloads.
   useEffect(() => {
@@ -781,6 +798,7 @@ export default function App() {
                               ? displayTitle(trackById[monitorClip.track_id])
                               : null),
                           showTitle: !monitorIntro && !monitorOutro,
+                          fontFamily: titleFont?.family,
                           intro: monitorIntro,
                           outro: monitorOutro,
                         }

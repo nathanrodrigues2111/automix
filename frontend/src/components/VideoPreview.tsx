@@ -27,11 +27,13 @@ interface VideoPreviewProps {
   /** Exposes the underlying player instance (for external transport controls). */
   onPlayerRef?: (player: MediaPlayerInstance | null) => void
   /** EDMPAPA brand overlay (live mix preview): bottom logo bar, plus the
-   *  track title in Bebas while `showTitle` is true — mirrors the geometry
-   *  the renderer burns into the final video. */
+   *  track title while `showTitle` is true — mirrors the geometry the
+   *  renderer burns into the final video. */
   brandOverlay?: {
     title: string | null
     showTitle: boolean
+    /** CSS family of the selected title font (default Bebas Neue). */
+    fontFamily?: string
     /** Intro animation window (screen-blended, ends on the first kick). */
     intro?: boolean
     /** Black YouTube-end-screen outro tail. */
@@ -209,7 +211,10 @@ export function VideoPreview({
           >
             <span
               className="truncate uppercase leading-none text-white"
-              style={{ fontFamily: "'Bebas', sans-serif", fontSize: "2.92cqw" }}
+              style={{
+                fontFamily: `'${brandOverlay.fontFamily ?? "Bebas Neue"}', 'Bebas', sans-serif`,
+                fontSize: "2.92cqw",
+              }}
             >
               {brandOverlay.title}
             </span>

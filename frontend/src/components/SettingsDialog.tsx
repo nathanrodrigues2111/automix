@@ -1,5 +1,6 @@
-import { useState, type ReactNode } from "react"
-import { Monitor, Moon, Settings2, Sun } from "lucide-react"
+import { useEffect, useRef, useState, type ReactNode } from "react"
+import { Monitor, Moon, Settings2, Sun, Upload } from "lucide-react"
+import { toast } from "sonner"
 import {
   Sheet,
   SheetContent,
@@ -34,6 +35,8 @@ import {
   setDownloadMaxHeight,
 } from "@/lib/downloadQuality"
 import { defaultApiBase, loadApiBase, setApiBase } from "@/lib/backend"
+import { ensureFontLoaded } from "@/lib/fonts"
+import { useFonts, useUploadFont } from "@/api/client"
 import { APP_VERSION, CHANGELOG } from "@/changelog"
 import type { RenderConfig } from "@/api/types"
 
@@ -82,6 +85,28 @@ export function SettingsDialog({
     loadDownloadMaxHeight(),
   )
   const [legalOpen, setLegalOpen] = useState(false)
+
+  // Title fonts: load every available font into the document so the
+  // dropdown can preview each one in its own face.
+  const fonts = useFonts()
+  const uploadFont = useUploadFont()
+  const fontInputRef = useRef<HTMLInputElement>(null)
+  useEffect(() => {
+    for (const f of fonts.data?.fonts ?? []) {
+      void ensureFontLoaded(f).catch(() => {})
+    }
+  }, [fonts.data])
+
+  const onFontFile = (file: File | null) => {
+    if (!file) return
+    uploadFont.mutate(file, {
+      onSuccess: (font) => {
+        setConfig({ ...config, title_font: font.id })
+        toast.success(`Font added: ${font.family}`)
+      },
+      onError: (e) => toast.error(`Font upload failed: ${e.message}`),
+    })
+  }
 
   return (
     <Sheet open={open} onOpenChange={(o) => !o && onClose()}>
@@ -434,6 +459,57 @@ export function SettingsDialog({
                   </SelectItem>
                 </SelectContent>
               </Select>
+            </div>
+
+            <div className="space-y-3">
+              <Label className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+                Title font
+              </Label>
+              <div className="flex items-center gap-2">
+                <Select
+                  value={config.title_font ?? fonts.data?.default ?? "BebasNeue-Regular"}
+                  onValueChange={(v) => setConfig({ ...config, title_font: v })}
+                >
+                  <SelectTrigger className="flex-1 bg-background/60 text-xs">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {(fonts.data?.fonts ?? []).map((f) => (
+                      <SelectItem
+                        key={f.id}
+                        value={f.id}
+                        style={{ fontFamily: `'${f.family}', sans-serif` }}
+                      >
+                        {f.family}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-9 shrink-0 gap-1.5 text-xs"
+                  disabled={uploadFont.isPending}
+                  onClick={() => fontInputRef.current?.click()}
+                >
+                  <Upload className="h-3.5 w-3.5" />
+                  {uploadFont.isPending ? "Uploading" : "Upload"}
+                </Button>
+                <input
+                  ref={fontInputRef}
+                  type="file"
+                  accept=".ttf,.otf"
+                  className="hidden"
+                  onChange={(e) => {
+                    onFontFile(e.target.files?.[0] ?? null)
+                    e.target.value = ""
+                  }}
+                />
+              </div>
+              <p className="text-[11px] leading-relaxed text-muted-foreground">
+                Used for the track titles burned into the video and the Short.
+                Upload any TTF or OTF file to add it to the list.
+              </p>
             </div>
 
             <SwitchRow

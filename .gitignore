@@ -48,3 +48,8 @@ assets/*.avi
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# User-uploaded title fonts (built-ins are tracked explicitly)
+assets/fonts/*
+!assets/fonts/BebasNeue-Regular.ttf
+!assets/fonts/Cubano.ttf

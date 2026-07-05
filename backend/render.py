@@ -562,7 +562,10 @@ def compute_title_windows(
     for i in range(1, len(durations)):
         cf = max(0.05, crossfades_s[i - 1])
         offset = max(0.0, cumulative - cf)
-        switches.append(offset if switch_at == "start" else offset + cf)
+        # "end" switches land ON the incoming kick; lead by ~1.5 video
+        # frames so the burned title (quantized to the 30fps grid) can
+        # never appear AFTER the kick — an editor leads the hit, not lags.
+        switches.append(offset if switch_at == "start" else max(offset, offset + cf - 0.045))
         cumulative = cumulative + durations[i] - cf
     total = cumulative
     windows: list[tuple[float, float]] = []
@@ -1012,24 +1015,39 @@ def _cut_concat_videos(
 
     filter_parts: list[str] = []
     labels: list[str] = []
+    seg_lens: list[float] = []
     v_cursor = 0.0  # frame-quantized running video time
+    # A LITTLE fade at each cut (user: pure hard cut strobes) — the cut
+    # position is unchanged; the incoming picture just blends in over
+    # ~0.25s starting exactly at the cut.
+    fade = 0.25
     for i in range(len(parts)):
         target_end = cuts[i] if i < len(cuts) else total
         want_len = target_end - v_cursor
         seg_len = round(want_len * fps) / fps if i < len(cuts) else want_len
-        seg_len = max(1.0 / fps, seg_len)
+        seg_len = max(2.0 / fps, seg_len)
         v_cursor += seg_len
+        seg_lens.append(seg_len)
         lbl = f"c{i}"
-        # Freeze-frame pad so audio-derived lengths can never underrun.
+        # Segments before a cut carry `fade` extra tail for the blend;
+        # freeze-frame pad so audio-derived lengths can never underrun.
+        ext = seg_len + (fade if i < len(cuts) else 0.0)
         filter_parts.append(
-            f"[{i}:v]tpad=stop_mode=clone:stop_duration=2.0,"
-            f"trim=start=0:end={seg_len:.4f},"
+            f"[{i}:v]tpad=stop_mode=clone:stop_duration=3.0,"
+            f"trim=start=0:end={ext:.4f},"
             f"setpts=PTS-STARTPTS[{lbl}]"
         )
         labels.append(lbl)
-    filter_parts.append(
-        "".join(f"[{l}]" for l in labels) + f"concat=n={len(labels)}:v=1:a=0[vout]"
-    )
+    prev = labels[0]
+    cum = seg_lens[0]
+    for i in range(1, len(labels)):
+        nxt = f"x{i}"
+        filter_parts.append(
+            f"[{prev}][{labels[i]}]xfade=transition=fade:duration={fade:.3f}:offset={cum:.4f}[{nxt}]"
+        )
+        cum += seg_lens[i]
+        prev = nxt
+    filter_parts.append(f"[{prev}]trim=duration={total:.4f}[vout]")
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     cmd = [

@@ -303,6 +303,41 @@ export function SettingsDialog({
                 onChange={(v) => setConfig({ ...config, hard_cut: v })}
               />
               <SwitchRow
+                title="Video cut blend"
+                description="Soften each video cut with a quick 0.25s transition"
+                checked={config.video_cut_fade ?? true}
+                onChange={(v) => setConfig({ ...config, video_cut_fade: v })}
+              />
+              {(config.video_cut_fade ?? true) && (
+                <div className="space-y-2 pl-1">
+                  <Label className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+                    Transition style
+                  </Label>
+                  <Select
+                    value={config.video_transition ?? "fade"}
+                    onValueChange={(v) =>
+                      setConfig({ ...config, video_transition: v })
+                    }
+                  >
+                    <SelectTrigger className="h-8 bg-background/60 text-xs">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="fade">Blend</SelectItem>
+                      <SelectItem value="variety">Variety (cycles styles)</SelectItem>
+                      <SelectItem value="fadeblack">Dip to black</SelectItem>
+                      <SelectItem value="fadewhite">Flash to white</SelectItem>
+                      <SelectItem value="circleopen">Circle open</SelectItem>
+                      <SelectItem value="pixelize">Pixelize</SelectItem>
+                      <SelectItem value="radial">Radial sweep</SelectItem>
+                      <SelectItem value="wipeleft">Wipe left</SelectItem>
+                      <SelectItem value="slideup">Slide up</SelectItem>
+                      <SelectItem value="hblur">Blur through</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
+              <SwitchRow
                 title="Stem-aware crossfade"
                 description="Fade drums/bass separately from vocals (needs the ML stack)"
                 checked={config.use_stem_crossfade}

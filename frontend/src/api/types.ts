@@ -84,6 +84,11 @@ export interface RenderConfig {
   no_time_stretch?: boolean
   /** EDMPAPA-style black bars + logo overlay on the final render. */
   brand_overlay?: boolean
+  /** Soften each hard video cut with a quick 0.25s fade (default on). */
+  video_cut_fade?: boolean
+  /** xfade style at cuts: "fade", a named xfade transition, or "variety"
+   *  to cycle punchy styles per cut. */
+  video_transition?: string
   /** Per-track title overlay on the final render. */
   show_titles?: boolean
   /** Black+silent tail reserved for YouTube end screens (seconds, 0 = off). */

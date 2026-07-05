@@ -97,6 +97,7 @@ const DEFAULT_CONFIG: Omit<RenderConfig, "clips"> = {
   // Auto-Mix. Native-BPM playback stays available in settings.
   no_time_stretch: false,
   brand_overlay: true, // EDMPAPA black bars + logo
+  video_cut_fade: true, // quick 0.25s blend on each video cut
   show_titles: true, // per-track title overlay
   outro_s: 10, // black outro reserved for YouTube end screens
   resolution: "1080p", // final render canvas

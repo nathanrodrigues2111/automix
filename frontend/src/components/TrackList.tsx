@@ -31,6 +31,7 @@ import { Progress } from "@/components/ui/progress"
 import {
   useAnalyze,
   useAnalyzeAll,
+  useParseTracklist,
   useSetCues,
   useCancelJob,
   useDeleteTrack,
@@ -187,10 +188,19 @@ export function TrackList({
     })
   }
 
-  // Tracklist cues (full DJ sets): paste "0:00 - Artist - Title" lines.
+  // Tracklist cues (full DJ sets): paste "0:00 - Artist - Title" lines or a
+  // whole 1001tracklists page copy; a debounced dry-run parse previews the
+  // cues the backend will keep.
   const setCues = useSetCues()
   const [cuesTrack, setCuesTrack] = useState<Track | null>(null)
   const [cuesText, setCuesText] = useState("")
+  const [cuesPreviewText, setCuesPreviewText] = useState("")
+  useEffect(() => {
+    const id = window.setTimeout(() => setCuesPreviewText(cuesText), 350)
+    return () => window.clearTimeout(id)
+  }, [cuesText])
+  const cuesPreview = useParseTracklist(cuesTrack ? cuesPreviewText : "")
+  const previewCues = cuesPreview.data?.cues ?? []
 
   const saveCues = () => {
     if (!cuesTrack || !cuesText.trim()) return
@@ -1031,7 +1041,7 @@ export function TrackList({
       </div>
 
       <Dialog open={!!cuesTrack} onOpenChange={(o) => !o && setCuesTrack(null)}>
-        <DialogContent className="flex max-h-[80vh] flex-col sm:max-w-lg">
+        <DialogContent className="flex h-[85vh] w-[min(96vw,72rem)] max-w-none flex-col sm:max-w-none">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <ListMusic className="h-4 w-4 text-primary" />
@@ -1039,9 +1049,10 @@ export function TrackList({
             </DialogTitle>
           </DialogHeader>
           <p className="text-[12px] leading-relaxed text-muted-foreground">
-            Paste one track per line, like "1:37 - Artist - Title". Timestamps
-            map each detected drop to its song; a list without timestamps
-            labels the drops in order.
+            Paste one track per line, like "1:37 - Artist - Title", or select
+            the whole tracklist on a 1001tracklists page and paste it as is.
+            The messy page text is cleaned up automatically and the preview
+            shows exactly which songs and timestamps were recognized.
           </p>
           <Button
             variant="outline"
@@ -1071,13 +1082,52 @@ export function TrackList({
             )}
             Fetch from YouTube (chapters/description)
           </Button>
-          <textarea
-            value={cuesText}
-            onChange={(e) => setCuesText(e.target.value)}
-            placeholder={"0:00 - Intro\n1:37 - Artist - Title\n..."}
-            spellCheck={false}
-            className="min-h-48 w-full flex-1 resize-y rounded-md border border-border bg-background p-2 font-mono text-xs focus-visible:outline-2 focus-visible:outline-ring"
-          />
+          <div className="grid min-h-0 flex-1 gap-3 sm:grid-cols-2">
+            <textarea
+              value={cuesText}
+              onChange={(e) => setCuesText(e.target.value)}
+              placeholder={
+                "0:00 - Intro\n1:37 - Artist - Title\n...\n\nor a raw 1001tracklists page copy"
+              }
+              spellCheck={false}
+              className="min-h-48 w-full resize-none rounded-md border border-border bg-background p-2 font-mono text-xs focus-visible:outline-2 focus-visible:outline-ring"
+            />
+            <div className="flex min-h-48 flex-col overflow-hidden rounded-md border border-border bg-muted/30">
+              <div className="flex items-center justify-between border-b border-border px-2 py-1.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                <span>Preview</span>
+                <span>
+                  {cuesText.trim()
+                    ? `${previewCues.length} track${previewCues.length === 1 ? "" : "s"}`
+                    : ""}
+                </span>
+              </div>
+              <div className="min-h-0 flex-1 overflow-y-auto p-1">
+                {previewCues.length === 0 ? (
+                  <p className="p-2 text-xs text-muted-foreground">
+                    {cuesText.trim()
+                      ? cuesPreview.isFetching
+                        ? "Parsing..."
+                        : "No tracks recognized yet. Check the pasted text."
+                      : "The recognized tracklist appears here as you paste."}
+                  </p>
+                ) : (
+                  <ul className="space-y-0.5">
+                    {previewCues.map((c, i) => (
+                      <li
+                        key={`${c.t_s ?? "x"}-${i}`}
+                        className="flex items-baseline gap-2 rounded px-1.5 py-1 text-xs odd:bg-background/60"
+                      >
+                        <span className="w-10 shrink-0 text-right font-mono tabular-nums text-muted-foreground">
+                          {c.t_s === null ? `#${i + 1}` : formatDuration(c.t_s)}
+                        </span>
+                        <span className="min-w-0 break-words">{c.title}</span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            </div>
+          </div>
           <DialogFooter>
             <Button variant="outline" size="sm" onClick={() => setCuesTrack(null)}>
               Cancel
@@ -1091,7 +1141,7 @@ export function TrackList({
       </Dialog>
 
       <Dialog open={bulkOpen} onOpenChange={setBulkOpen}>
-        <DialogContent className="flex max-h-[80vh] flex-col sm:max-w-xl">
+        <DialogContent className="flex max-h-[80vh] flex-col sm:max-w-2xl">
           <DialogHeader>
             <DialogTitle>Rename tracks</DialogTitle>
           </DialogHeader>

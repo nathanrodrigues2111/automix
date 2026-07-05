@@ -1047,6 +1047,14 @@ class TracklistRequest(schemas.BaseModel):
     auto: bool = False  # fetch chapters/description from YouTube instead
 
 
+@app.post("/api/tracklist/parse")
+async def parse_tracklist_preview(req: TracklistRequest) -> dict:
+    """Dry-run parse of pasted tracklist text (1001tracklists page copies,
+    timestamped lists, plain lists) so the UI can preview the cues."""
+    cues = analysis_mod.parse_tracklist(req.text)
+    return {"cues": cues}
+
+
 @app.post("/api/tracks/{track_id}/cues")
 async def post_track_cues(track_id: str, req: TracklistRequest) -> dict:
     """Attach a pasted tracklist (timestamped or not) to a track and label

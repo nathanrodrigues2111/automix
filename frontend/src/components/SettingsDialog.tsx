@@ -139,7 +139,7 @@ export function SettingsDialog({
               >
                 {ACCENTS.map((a) => {
                   const selected =
-                    accent === a.value || (!accent && a.name === "Violet")
+                    accent === a.value || (!accent && a.name === "Blue")
                   return (
                     <button
                       key={a.name}
@@ -148,7 +148,7 @@ export function SettingsDialog({
                       aria-checked={selected}
                       title={a.name}
                       onClick={() => {
-                        const v = a.name === "Violet" ? null : a.value
+                        const v = a.name === "Blue" ? null : a.value
                         setAccent(v)
                         setAccentState(v)
                       }}
@@ -503,7 +503,7 @@ export function SettingsDialog({
           </section>
 
           <Dialog open={legalOpen} onOpenChange={setLegalOpen}>
-            <DialogContent className="flex max-h-[80vh] flex-col sm:max-w-md">
+            <DialogContent className="flex max-h-[85vh] flex-col sm:max-w-2xl">
               <DialogHeader>
                 <DialogTitle>Privacy &amp; disclaimer</DialogTitle>
               </DialogHeader>
@@ -537,7 +537,7 @@ export function SettingsDialog({
           </Dialog>
 
           <Dialog open={changelogOpen} onOpenChange={setChangelogOpen}>
-            <DialogContent className="flex max-h-[80vh] flex-col sm:max-w-md">
+            <DialogContent className="flex max-h-[85vh] flex-col sm:max-w-2xl">
               <DialogHeader>
                 <DialogTitle>Changelog</DialogTitle>
               </DialogHeader>

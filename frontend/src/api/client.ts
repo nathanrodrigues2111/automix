@@ -132,6 +132,27 @@ export function useRenameTrack() {
   })
 }
 
+export interface ParsedCue {
+  t_s: number | null
+  title: string
+}
+
+/** Dry-run parse of pasted tracklist text (1001tracklists page copies,
+ * timestamped lists) so the dialog can preview the cues before saving. */
+export function useParseTracklist(text: string) {
+  return useQuery({
+    queryKey: ["tracklist-parse", text],
+    queryFn: () =>
+      http<{ cues: ParsedCue[] }>("/api/tracklist/parse", {
+        method: "POST",
+        body: JSON.stringify({ text }),
+      }),
+    enabled: text.trim().length > 0,
+    staleTime: Infinity,
+    placeholderData: (prev) => prev,
+  })
+}
+
 export function useSetCues() {
   const qc = useQueryClient()
   return useMutation({

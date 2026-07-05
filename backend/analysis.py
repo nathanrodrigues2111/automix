@@ -572,17 +572,123 @@ def _clean_cue_title(title: str) -> str:
     return t
 
 
+# 1001tracklists page copies: each entry is a block of lines — artwork alt
+# text, track number, the "Artist - Title LABEL" line, play/vote counts,
+# uploader "(151.2k)", "Save 118" buttons. Only the title line has " - ".
+_TL1001_NOISE_RE = re.compile(
+    r"^(?:"
+    r"artwork placeholder"
+    r"|(?:pre-)?save(?:\s+[\d,.]+k?)?"  # "Save 118" / "Pre-Save 0"
+    r"|\([\d,.]+k?\)"  # uploader points "(151.2k)"
+    r"|[\d,.]+"  # bare track numbers / vote counts
+    r"|guest"
+    r")$",
+    re.IGNORECASE,
+)
+_TL1001_LABELS = {"REVEALED"}  # all-caps titles hide the label; catch common ones
+
+
+def _looks_like_1001tl(lines: list[str]) -> bool:
+    sig = 0
+    for raw in lines:
+        s = raw.strip()
+        if (
+            s.endswith(" Artwork")
+            or s.lower() in ("artwork placeholder", "w/")
+            or re.match(r"^(?:pre-)?save\s+[\d,.]+k?$", s, re.IGNORECASE)
+            or re.match(r"^\([\d,.]+k?\)$", s)
+        ):
+            sig += 1
+    return sig >= 3
+
+
+def _strip_record_label(t: str) -> str:
+    """Drop the trailing record label a 1001tracklists copy appends to the
+    title ("... (Intro Edit) REVEALED", "...  SUPERSTAR/DATA REC.")."""
+    t = re.sub(r"(?:\s*\[[^\]\[]+\])+$", "", t.strip()).strip()  # [REVEALED]/[PRMD]
+    # two-plus spaces separate title from an all-caps label block
+    parts = re.split(r"\s{2,}", t, maxsplit=1)
+    if len(parts) == 2 and re.search(r"[A-Z]", parts[1]) and not re.search(r"[a-z]", parts[1]):
+        t = parts[0].strip()
+    words = t.split()
+    while words and words[-1].upper().strip("/") in _TL1001_LABELS:
+        words.pop()
+    # trailing run of all-caps tokens after a lowercase/digit/paren end is a label
+    i = len(words)
+    while i > 0:
+        w = words[i - 1]
+        if len(w) >= 2 and re.search(r"[A-Z]", w) and not re.search(r"[a-z]", w):
+            i -= 1
+        else:
+            break
+    if 0 < i < len(words):
+        head = " ".join(words[:i])
+        if re.search(r"[a-z0-9)]$", head):
+            return head
+    return " ".join(words) or t
+
+
+def _parse_1001tl(lines: list[str]) -> list[dict[str, Any]]:
+    """Strict parser for a raw 1001tracklists page copy. Real title lines
+    always read "Artist - Title"; "w/" marks a mashup/acappella layered over
+    the current track (skipped — it is not a new cue)."""
+    cues: list[dict[str, Any]] = []
+    pending_t: float | None = None
+    skip_next_title = False
+    for raw in lines:
+        line = raw.strip().lstrip("-•*").strip()
+        if not line:
+            continue
+        if line.endswith(" Artwork") or line.lower() == "artwork placeholder":
+            continue
+        if line.lower() == "w/":
+            skip_next_title = True
+            pending_t = None
+            continue
+        m = _TIME_ONLY_RE.match(line)
+        if m:
+            if not skip_next_title:
+                pending_t = _cue_seconds(m.group(1), m.group(2), m.group(3))
+            continue
+        if _TL1001_NOISE_RE.match(line):
+            continue
+        if " - " not in line:
+            continue  # uploader names and other page furniture
+        if skip_next_title:
+            skip_next_title = False
+            pending_t = None
+            continue
+        title = _strip_record_label(_clean_cue_title(line))
+        if title:
+            cues.append({"t_s": pending_t, "title": title})
+        pending_t = None
+    # the opening track usually has no cue time on 1001tracklists
+    if cues and cues[0]["t_s"] is None and any(c["t_s"] is not None for c in cues[1:]):
+        cues[0]["t_s"] = 0.0
+    return cues
+
+
 def parse_tracklist(text: str) -> list[dict[str, Any]]:
     """Parse a pasted tracklist into cues — format-agnostic.
 
     Handles "1:37 - Artist - Title", "[1:37] Title", numbered lists, and
     the two-line style where the timestamp sits alone on the line above the
-    title (1001tracklists copy format). Lines without any timestamp become
-    order-based cues when the whole list is untimestamped.
+    title (1001tracklists copy format). A raw 1001tracklists PAGE copy
+    (artwork alt text, vote counts, Save buttons, "w/" mashup lines) is
+    detected and routed through the strict parser. Lines without any
+    timestamp become order-based cues when the whole list is untimestamped.
     """
+    lines = text.splitlines()
+    if _looks_like_1001tl(lines):
+        cues_1001 = _parse_1001tl(lines)
+        timed_1001 = [c for c in cues_1001 if c["t_s"] is not None]
+        if timed_1001:
+            timed_1001.sort(key=lambda c: c["t_s"])
+            return timed_1001
+        return cues_1001
     cues: list[dict[str, Any]] = []
     pending_t: float | None = None
-    for raw in text.splitlines():
+    for raw in lines:
         line = raw.strip().lstrip("-•*").strip()
         # strip list numbering ("01." / "3)") before looking for timestamps
         line = re.sub(r"^\d{1,3}[.)]\s+", "", line)

@@ -8,7 +8,7 @@ export interface AccentPreset {
 }
 
 export const ACCENTS: AccentPreset[] = [
-  { name: "Violet", value: "oklch(0.606 0.25 292.717)" }, // app default
+  { name: "Violet", value: "oklch(0.606 0.25 292.717)" },
   { name: "Purple", value: "oklch(0.627 0.265 303.9)" },
   { name: "Fuchsia", value: "oklch(0.667 0.295 322.15)" },
   { name: "Pink", value: "oklch(0.656 0.241 354.308)" },
@@ -21,9 +21,14 @@ export const ACCENTS: AccentPreset[] = [
   { name: "Teal", value: "oklch(0.704 0.14 182.503)" },
   { name: "Cyan", value: "oklch(0.715 0.143 215.221)" },
   { name: "Sky", value: "oklch(0.685 0.169 237.323)" },
-  { name: "Blue", value: "oklch(0.623 0.214 259.815)" },
+  { name: "Blue", value: "oklch(0.623 0.214 259.815)" }, // app default
   { name: "Indigo", value: "oklch(0.585 0.233 277.117)" },
 ]
+
+/** The accent used when nothing is stored (a stored value always wins). */
+export const DEFAULT_ACCENT_NAME = "Blue"
+export const DEFAULT_ACCENT =
+  ACCENTS.find((a) => a.name === DEFAULT_ACCENT_NAME)?.value ?? ACCENTS[0].value
 
 /** True when `value` is one of the built-in presets. */
 export function isPresetAccent(value: string | null): boolean {
@@ -57,14 +62,10 @@ async function updateFavicon(value: string | null): Promise<void> {
 
 export function applyAccent(value: string | null): void {
   const root = document.documentElement
-  if (!value) {
-    root.style.removeProperty("--primary")
-    root.style.removeProperty("--ring")
-  } else {
-    root.style.setProperty("--primary", value)
-    root.style.setProperty("--ring", value)
-  }
-  void updateFavicon(value)
+  const v = value ?? DEFAULT_ACCENT
+  root.style.setProperty("--primary", v)
+  root.style.setProperty("--ring", v)
+  void updateFavicon(v)
 }
 
 export function loadAccent(): string | null {

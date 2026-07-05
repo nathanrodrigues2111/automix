@@ -275,14 +275,14 @@ export default function App() {
         if (raw) {
           const p = JSON.parse(raw) as { left?: number; right?: number }
           return {
-            left: Math.min(520, Math.max(200, p.left ?? 260)),
+            left: Math.min(520, Math.max(200, p.left ?? 320)),
             right: Math.min(600, Math.max(280, p.right ?? 360)),
           }
         }
       } catch {
         // fall through to defaults
       }
-      return { left: 260, right: 360 }
+      return { left: 320, right: 360 }
     },
   )
   useEffect(() => {

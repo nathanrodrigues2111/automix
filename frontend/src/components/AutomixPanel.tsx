@@ -363,7 +363,7 @@ export function AutomixPanel({ progress, variant = "card" }: AutomixPanelProps) 
 
   const chooserEl = (
     <Dialog open={chooserOpen} onOpenChange={setChooserOpen}>
-      <DialogContent className="flex max-h-[80vh] flex-col sm:max-w-lg">
+      <DialogContent className="flex max-h-[85vh] flex-col sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <ListChecks className="h-4 w-4 text-primary" />

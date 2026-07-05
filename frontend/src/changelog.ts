@@ -9,6 +9,17 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "0.7.0",
+    date: "2026-07-05",
+    title: "Paste tracklists straight from 1001tracklists",
+    items: [
+      "Select a whole 1001tracklists page, paste it as is, and the tracklist is extracted automatically: song number blocks, vote counts, Save buttons, and uploader names are stripped away",
+      "Record labels after titles (like REVEALED) are removed, and w/ acappella or mashup overlay lines are folded into the main track",
+      "The tracklist dialog shows a live preview of every recognized song and timestamp before you save",
+      "Dialogs are larger across the app, so tracklists, changelogs, and track choosers get room to breathe",
+    ],
+  },
+  {
     version: "0.6.0",
     date: "2026-07-05",
     title: "Clean audio, hard cuts & self-verifying renders",

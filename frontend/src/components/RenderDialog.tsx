@@ -55,10 +55,12 @@ export function RenderDialog({
   const [resolution, setResolution] = useState<string>(
     config.resolution ?? "1080p",
   )
+  const [activeVideo, setActiveVideo] = useState<"full" | "short">("full")
 
   // Reset job state when the dialog closes so reopening starts fresh.
   const handleClose = () => {
     setJobId(null)
+    setActiveVideo("full")
     render.reset()
     onClose()
   }
@@ -68,6 +70,8 @@ export function RenderDialog({
   // The real output path arrives in the final WS progress message — not in the
   // /api/render response (which only has the job_id).
   const outputPath = p?.output_path ?? null
+  const shortPath = p?.short_path ?? null
+  const shownPath = activeVideo === "short" && shortPath ? shortPath : outputPath
 
   const start = () => {
     const payload: RenderConfig = isPreview
@@ -155,7 +159,7 @@ export function RenderDialog({
           </div>
         )}
 
-        {done && outputPath && (
+        {done && outputPath && shownPath && (
           <div className="space-y-3 rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-3">
             <div className="flex items-center justify-between gap-2">
               <div className="flex items-center gap-2 text-sm font-medium text-emerald-600 dark:text-emerald-400">
@@ -167,7 +171,7 @@ export function RenderDialog({
                   size="sm"
                   className="h-7 text-xs"
                   onClick={() =>
-                    reveal.mutate(outputPath, {
+                    reveal.mutate(shownPath, {
                       onError: (e) =>
                         toast.error(`Could not open folder: ${e.message}`),
                     })
@@ -177,22 +181,51 @@ export function RenderDialog({
                 </Button>
                 <Button asChild size="sm" className="h-7 text-xs">
                   <a
-                    href={mediaUrl(outputPath)}
-                    download={outputPath.split("/").pop() ?? true}
+                    href={mediaUrl(shownPath)}
+                    download={shownPath.split("/").pop() ?? true}
                   >
                     <Download className="h-3 w-3" /> Download
                   </a>
                 </Button>
               </div>
             </div>
+            {shortPath && (
+              <div className="grid grid-cols-2 gap-1 rounded-md bg-muted/50 p-1">
+                {(
+                  [
+                    { key: "full", label: "Full video" },
+                    { key: "short", label: "Short" },
+                  ] as const
+                ).map(({ key, label }) => (
+                  <button
+                    key={key}
+                    type="button"
+                    onClick={() => setActiveVideo(key)}
+                    className={
+                      "rounded px-2 py-1.5 text-xs font-medium transition-colors " +
+                      (activeVideo === key
+                        ? "bg-background text-foreground shadow-sm"
+                        : "text-muted-foreground hover:text-foreground")
+                    }
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            )}
             <Player
-              src={mediaUrl(outputPath)}
-              title={outputPath.split("/").pop() ?? "Rendered mix"}
+              key={shownPath}
+              src={mediaUrl(shownPath)}
+              title={shownPath.split("/").pop() ?? "Rendered mix"}
               autoPlay
-              className="ring-emerald-500/25"
+              className={
+                activeVideo === "short"
+                  ? "mx-auto max-w-[280px] ring-emerald-500/25"
+                  : "ring-emerald-500/25"
+              }
             />
             <div className="truncate font-mono text-[11px] text-muted-foreground">
-              {outputPath}
+              {shownPath}
             </div>
           </div>
         )}

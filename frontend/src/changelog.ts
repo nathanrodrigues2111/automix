@@ -22,7 +22,10 @@ export const CHANGELOG: ChangelogEntry[] = [
       "Settings controls line up: one control height and consistent label spacing throughout",
       "Mix Editor panel is more compact with tighter padding around clips",
       "Delete all mixes in one go from the Mixes panel (with a confirm step)",
-      "YouTube Shorts: every render also produces a vertical Short with the first minute of the mix inside the EDMPAPA template, artist and track name switching with each drop, and a watch-the-full-mix end card; turn it off in Settings > Output",
+      "YouTube Shorts: every render also produces a vertical Short with the first minute of the mix inside the EDMPAPA template, artist and track name switching with each drop, and a watch-the-full-video end card; turn it off in Settings > Output",
+      "Short drops fixed: real 8-bar drops no longer collapse to 4 bars when the energy scan undershoots by half a bar (Chicken Soup, Ghetto Shout Out and friends)",
+      "New Drop length setting in Settings > Mix: Auto or a forced 4/8/12/16 bars per drop, applied when adding drops and in Auto-Mix",
+      "The render dialog shows the finished Short next to the full video in tabs",
     ],
   },
   {

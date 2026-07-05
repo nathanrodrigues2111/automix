@@ -56,12 +56,12 @@ const TOUR_STEPS: TourStep[] = [
   {
     target: "automix",
     title: "Import from YouTube",
-    text: "Paste a playlist or video URL here. Auto-Mix runs the whole pipeline in one click, Import only downloads tracks to the library, and Choose lets you hand-pick tracks from the playlist first.",
+    text: "Paste a playlist or video URL here. Auto-Mix runs the whole pipeline in one click, Import only downloads tracks to the library, and Choose lets you hand-pick tracks from the playlist first. Downloads grab the highest resolution available (4K when YouTube has it); cap it in Settings under Downloads.",
   },
   {
     target: "tracks",
     title: "Your track library",
-    text: "Every imported track with its BPM, key, and detected drops. Full DJ sets work too: paste a tracklist to label every drop with its song name, search by song, and add all drops in one click. Rename, re-analyze, and batch delete live on each row.",
+    text: "Every imported track with its BPM, key, and detected drops. Full DJ sets work too: paste a tracklist to label every drop with its song name, search by song, and add all drops in one click. Drops already in the mix show a green check. Rename, re-analyze, and batch delete live on each row.",
   },
   {
     target: "preview",
@@ -76,7 +76,7 @@ const TOUR_STEPS: TourStep[] = [
   {
     target: "mixer",
     title: "Mix editor",
-    text: "Your mix, clip by clip. Drag to reorder, Auto-order for harmonic (Camelot) flow, Preview to hear the whole mix instantly in the browser, and Render for the final MP4 (pick 480p to 4K) in videos/exports.",
+    text: "Your mix, clip by clip. Drag to reorder, Auto-order for harmonic (Camelot) flow, Preview to hear the whole mix instantly in the browser, and Render for the final MP4 (pick 480p to 4K) in videos/exports. Each render also makes a vertical YouTube Short of the first minute; manage both from the render dialog tabs or the Mixes panel. Drop length and the Short toggle live in Settings.",
   },
   {
     title: "Shortcuts",
@@ -103,6 +103,7 @@ const DEFAULT_CONFIG: Omit<RenderConfig, "clips"> = {
   resolution: "1080p", // final render canvas
   filename_style: "file", // exports named after the source video + date/time
   make_short: true, // companion vertical Short of the first drop
+  drop_bars: 0, // 0 = auto (detected drop body); N forces every drop to N bars
   harmonic_pitch_shift_max_semitones: 0, // don't pitch-shift either
 }
 
@@ -512,10 +513,17 @@ export default function App() {
     const rawStart = drop?.start_s ?? t.analysis.drop_start_s
     const start_s =
       kick_s != null ? Math.max(0, kick_s - 8 * beatSec) : rawStart
-    const end_s = drop?.end_s
+    // Settings > Mix > Drop length: force every drop body to N bars from
+    // its kick (using the drop's own measured kick period when available).
+    const dropBars = config.drop_bars ?? 0
+    const dropBeat = drop?.kick_period_s ?? beatSec
+    const end_s =
+      dropBars > 0 && drop && kick_s != null
+        ? kick_s + dropBars * 4 * dropBeat
+        : drop?.end_s
     const length_bars =
-      drop && drop.end_s > drop.start_s
-        ? Math.max(4, Math.round((drop.end_s - drop.start_s) / (beatSec * 4)))
+      drop && end_s != null && end_s > drop.start_s
+        ? Math.max(4, Math.round((end_s - drop.start_s) / (beatSec * 4)))
         : 16
 
     // BPM-mismatch warning: if the previous clip's BPM is >5% off, transitions

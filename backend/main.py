@@ -545,6 +545,7 @@ async def post_render(req: schemas.RenderRequest) -> dict:
                     "message": _done_message(record),
                     "done": True,
                     "output_path": record["output_path"],
+                    "short_path": record.get("short_path"),
                     "render_id": record["id"],
                 }
             )
@@ -836,16 +837,24 @@ def _automix_pipeline(req: schemas.AutomixRequest, progress, cancel=None) -> dic
             float(c["t_s"]) for c in (a.get("cues") or []) if c.get("t_s") is not None
         )
 
+        # Settings > Mix > Drop length: 0 = auto (detected body, extended to
+        # 8 bars for set drops), otherwise force every drop to N bars.
+        drop_bars = float((req.config or {}).get("drop_bars") or 0.0)
+
         def _extended_end(d: dict) -> float | None:
             end = d.get("end_s")
             kick, per = d.get("kick_s"), d.get("kick_period_s")
-            if end is None or kick is None or not a.get("cues"):
+            if end is None or kick is None:
+                return end
+            if not a.get("cues") and drop_bars <= 0:
                 return end
             bar = 4.0 * float(per) if per else 4.0 * 60.0 / float(a.get("bpm") or 128.0)
-            want = float(kick) + 8.0 * bar
+            want = float(kick) + (drop_bars if drop_bars > 0 else 8.0) * bar
             nxt = next((t for t in timed_cue_ts if t > float(kick) + 1.0), None)
             if nxt is not None:
                 want = min(want, nxt - 0.5)
+            if drop_bars > 0:
+                return want
             return max(float(end), want)
 
         for d in chosen:
@@ -907,6 +916,7 @@ async def post_automix(req: schemas.AutomixRequest) -> dict:
                     "message": _done_message(record),
                     "done": True,
                     "output_path": record["output_path"],
+                    "short_path": record.get("short_path"),
                     "render_id": record["id"],
                 }
             )

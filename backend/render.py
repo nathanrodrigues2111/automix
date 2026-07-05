@@ -849,18 +849,18 @@ SHORT_TEMPLATE = ASSETS_DIR / "edmpapa.mp4"
 # top so its black passes through.
 _SHORT_W, _SHORT_H = 1080, 1920
 _SHORT_WIN_TOP, _SHORT_WIN_BOT = 445, 1475
-# The block (artist bar, video, track bar) is inset from the frame edges;
-# the video keeps its full 16:9 frame (NO horizontal crop) and the black
-# bars absorb the rest of the window height.
-_SHORT_INSET_X = 80
-_SHORT_VID_W = _SHORT_W - 2 * _SHORT_INSET_X  # 920
-_SHORT_VID_H = 518  # 920 x 9/16 — the whole mix frame, uncropped
-_SHORT_BAR_H = (_SHORT_WIN_BOT - _SHORT_WIN_TOP - _SHORT_VID_H) // 2  # 256
-_SHORT_VID_Y = _SHORT_WIN_TOP + _SHORT_BAR_H  # 701
+# The video runs edge to edge at the mix's full 16:9 aspect (NO crop, NO
+# inset — show as much of the main video as possible); the black text bars
+# above/below absorb the rest of the template window height.
+_SHORT_INSET_X = 0
+_SHORT_VID_W = _SHORT_W  # 1080, edge to edge
+_SHORT_VID_H = 608  # 1080 x 9/16 — the whole mix frame, uncropped
+_SHORT_BAR_H = (_SHORT_WIN_BOT - _SHORT_WIN_TOP - _SHORT_VID_H) // 2  # 211
+_SHORT_VID_Y = _SHORT_WIN_TOP + _SHORT_BAR_H  # 656
 
 
 _SHORT_END_CARD_S = 3.0
-_SHORT_END_CARD_TEXT = "WATCH THE FULL MIX BELOW"
+_SHORT_END_CARD_TEXT = "WATCH THE FULL VIDEO LINKED BELOW"
 
 
 def _short_titles_ass(
@@ -875,10 +875,10 @@ def _short_titles_ass(
     stay inside the bar width."""
     max_w = _SHORT_VID_W - 60
 
-    def _fs(text: str, base: int = 88) -> int:
+    def _fs(text: str, base: int = 104) -> int:
         if not text:
             return base
-        return max(44, min(base, int(max_w / (0.5 * len(text)))))
+        return max(48, min(base, int(max_w / (0.5 * len(text)))))
 
     def _ts(t: float) -> str:
         t = max(0.0, t)
@@ -925,10 +925,17 @@ def _short_titles_ass(
             )
     # End card: centered call-to-action on black (the template's wordmark
     # and subscribe button stay blended over it).
-    card = _esc(_SHORT_END_CARD_TEXT)
+    # Two centered lines so the text can stay big; alignment 5 centers the
+    # whole block on the frame middle.
+    words = _esc(_SHORT_END_CARD_TEXT).split()
+    half = (len(words) + 1) // 2
+    card_lines = [" ".join(words[:half]), " ".join(words[half:])]
+    longest = max(len(ln) for ln in card_lines if ln) if any(card_lines) else 1
+    card_fs = max(56, min(92, int((_SHORT_W - 120) / (0.5 * longest))))
+    card = "\\N".join(ln for ln in card_lines if ln)
     lines.append(
         f"Dialogue: 0,{_ts(card_start)},{_ts(dur)},Short,,0,0,0,,"
-        f"{{\\pos({_SHORT_W // 2},{_SHORT_H // 2})\\fs72}}{card}"
+        f"{{\\pos({_SHORT_W // 2},{_SHORT_H // 2})\\fs{card_fs}}}{card}"
     )
     out_ass.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
@@ -991,7 +998,9 @@ def _render_short(
         "-filter_complex", filt,
         "-map", "[v]", "-map", "[a]",
         "-t", f"{dur:.3f}",
-        *_x264_encode_args(False),
+        # veryfast: Shorts get recompressed hard by YouTube anyway, and this
+        # keeps the companion render a small fraction of the mix's time.
+        "-c:v", "libx264", "-crf", "18", "-preset", "veryfast",
         "-pix_fmt", "yuv420p",
         "-c:a", "aac", "-b:a", "192k",
         "-movflags", "+faststart",

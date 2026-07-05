@@ -155,7 +155,7 @@ def _snap_to_downbeat(t: float, downbeats: list[float]) -> float:
     return min(downbeats, key=lambda d: abs(d - t))
 
 
-DROPS_VERSION = 7
+DROPS_VERSION = 8
 
 
 def find_drops(
@@ -440,9 +440,13 @@ def find_drops(
 
         natural_end = _scan_drop_end(peak_idx)
         sustain_s = max(0.0, natural_end - kick_t)
-        # 8 bars only when the drop's energy actually sustains the full run —
-        # otherwise the clip drags dead air into the next transition.
-        n_bars = 8 if sustain_s >= 8.0 * bar_s else 4
+        # 8 bars when the drop's energy sustains MOST of the run. The scan
+        # systematically undershoots on festival audio (crowd/camera dips,
+        # the breath before the next section), and a strict >= 8 bars gate
+        # collapsed real 8-bar drops to 4 for missing it by half a bar.
+        # Dead air is not a risk: _snap_end_to_kick_grid pulls the cut back
+        # to the last REAL kick if the energy truly dies early.
+        n_bars = 8 if sustain_s >= 6.5 * bar_s else 4
         end = min(duration, kick_t + n_bars * bar_s)
         end = min(duration, _snap_end_to_kick_grid(end))
 

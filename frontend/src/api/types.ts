@@ -8,6 +8,8 @@ export interface Drop {
   start_s: number
   end_s: number
   kick_s?: number
+  /** Measured kick period (seconds per beat) inside the drop body. */
+  kick_period_s?: number
   score: number
   /** From a set's tracklist cues. */
   title?: string | null
@@ -97,6 +99,8 @@ export interface RenderConfig {
   resolution?: string
   /** Export naming: "file" (source video name + random number) | "timestamp". */
   filename_style?: string
+  /** Force every drop clip to N bars (0 = auto: detected drop body). */
+  drop_bars?: number
   /** Also render a vertical YouTube Short of the first drop. */
   make_short?: boolean
   harmonic_pitch_shift_max_semitones: number
@@ -190,5 +194,6 @@ export interface ProgressMessage {
   message: string
   done: boolean
   output_path?: string | null
+  short_path?: string | null
   render_id?: string | null
 }

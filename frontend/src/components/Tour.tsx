@@ -59,22 +59,62 @@ export function Tour({ steps, step, onStep, onClose }: TourProps) {
   const pad = 8
   const vw = window.innerWidth
   const vh = window.innerHeight
-  // Card placement: below the target when there's room, else above; centered
-  // when the step has no target.
+  // Card placement: below the target when there's room, else above, else
+  // beside it (full-height targets leave no room either way); centered when
+  // the step has no target. Every branch clamps to the viewport and caps
+  // the card height so long step texts scroll instead of spilling off
+  // screen.
   const cardW = Math.min(380, vw - 24)
+  const gap = pad + 8
+  const estH = 240 // safe estimate; maxHeight + scroll covers the rest
   let cardStyle: React.CSSProperties
   if (rect) {
-    const below = rect.bottom + 12 + 200 < vh
     const left = Math.max(12, Math.min(rect.left, vw - cardW - 12))
-    cardStyle = below
-      ? { top: rect.bottom + pad + 8, left, width: cardW }
-      : { bottom: vh - rect.top + pad + 8, left, width: cardW }
+    const spaceBelow = vh - rect.bottom - gap - 12
+    const spaceAbove = rect.top - gap - 12
+    const spaceRight = vw - rect.right - gap - 12
+    if (spaceBelow >= estH) {
+      cardStyle = {
+        top: rect.bottom + gap,
+        left,
+        width: cardW,
+        maxHeight: spaceBelow,
+        overflowY: "auto",
+      }
+    } else if (spaceAbove >= estH) {
+      cardStyle = {
+        bottom: vh - rect.top + gap,
+        left,
+        width: cardW,
+        maxHeight: spaceAbove,
+        overflowY: "auto",
+      }
+    } else if (spaceRight >= cardW) {
+      cardStyle = {
+        top: Math.max(12, Math.min(rect.top, vh - estH - 12)),
+        left: rect.right + gap,
+        width: cardW,
+        maxHeight: vh - 24,
+        overflowY: "auto",
+      }
+    } else {
+      cardStyle = {
+        top: "50%",
+        left: "50%",
+        transform: "translate(-50%, -50%)",
+        width: cardW,
+        maxHeight: vh - 24,
+        overflowY: "auto",
+      }
+    }
   } else {
     cardStyle = {
       top: "50%",
       left: "50%",
       transform: "translate(-50%, -50%)",
       width: cardW,
+      maxHeight: vh - 24,
+      overflowY: "auto",
     }
   }
 

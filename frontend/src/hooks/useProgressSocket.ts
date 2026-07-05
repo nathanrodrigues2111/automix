@@ -8,6 +8,7 @@ export interface ProgressEntry {
   message: string
   done: boolean
   output_path?: string | null
+  short_path?: string | null
   render_id?: string | null
 }
 
@@ -43,6 +44,7 @@ export function useProgressSocket(): ProgressMap {
               message: msg.message,
               done: msg.done,
               output_path: msg.output_path ?? prev[msg.job_id]?.output_path ?? null,
+              short_path: msg.short_path ?? prev[msg.job_id]?.short_path ?? null,
               render_id: msg.render_id ?? prev[msg.job_id]?.render_id ?? null,
             },
           }))

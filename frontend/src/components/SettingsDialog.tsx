@@ -257,6 +257,33 @@ export function SettingsDialog({
               </div>
             </div>
 
+            <div className="space-y-3">
+              <Label className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+                Drop length
+              </Label>
+              <Select
+                value={String(config.drop_bars ?? 0)}
+                onValueChange={(v) =>
+                  setConfig({ ...config, drop_bars: parseInt(v, 10) })
+                }
+              >
+                <SelectTrigger className="bg-background/60 text-xs">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="0">Auto (detected drop body)</SelectItem>
+                  <SelectItem value="4">4 bars</SelectItem>
+                  <SelectItem value="8">8 bars</SelectItem>
+                  <SelectItem value="12">12 bars</SelectItem>
+                  <SelectItem value="16">16 bars</SelectItem>
+                </SelectContent>
+              </Select>
+              <p className="text-[11px] leading-relaxed text-muted-foreground">
+                How long each drop plays from its kick. Applies to drops you
+                add next and to Auto-Mix.
+              </p>
+            </div>
+
             <SliderRow
               label="Crossfade"
               valueText={`${config.crossfade_bars.toFixed(2)} bars`}

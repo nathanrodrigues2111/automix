@@ -81,6 +81,19 @@ export function VideoPreview({
     playerRef.current?.pause()
   }, [pauseRequestKey])
 
+  // Loudness-match raw track playback. Festival sets are mastered so hot
+  // their peaks decode ABOVE full scale (this library's KSHMR set hits
+  // +3.3 dB over); at 100% volume every player clips them audibly. YouTube
+  // applies the same quiet turn-down on its own player, so this matches
+  // what the track sounds like on youtube.com and what the rendered mix
+  // (normalized to -14 LUFS) will sound like.
+  useEffect(() => {
+    const player = playerRef.current
+    const lufs = track?.analysis?.lufs
+    if (!player || lufs == null || !Number.isFinite(lufs)) return
+    player.volume = Math.min(1, Math.pow(10, (-14 - lufs) / 20))
+  }, [track])
+
   // Seek only (waveform scrub) — don't change play state.
   useEffect(() => {
     if (!seekRequest) return

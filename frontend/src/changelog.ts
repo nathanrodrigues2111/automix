@@ -9,6 +9,24 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "0.6.0",
+    date: "2026-07-05",
+    title: "Clean audio, hard cuts & self-verifying renders",
+    items: [
+      "Audio pipeline is float end to end: hot festival masters (peaks above full scale) no longer clip anywhere",
+      "Loudness set by pure linear gain plus one final peak limiter; the pumping distortion from dynamic normalization is gone",
+      "Video transitions are hard cuts on the incoming build (the natural editor cut), with titles switching on the cut",
+      "Every drop in a set gets a full 8-bar body, so no more 2-second drops",
+      "Kick anchors validated against the actual drop slam (fixes drops that started a beat early)",
+      "Every render verifies itself: seam kick timing, loudness, true peak, and on-screen titles, with a report saved next to the export",
+      "Long titles shorten smartly (never losing the track identity), then scale or wrap, always inside safe margins",
+      "Raw track playback in the app auto-levels like YouTube does, so hot sources don't blow out",
+      "Drop detection runs per song inside a set's tracklist, so every song gets its own candidates",
+      "Track list groups each song's drops as a folder tree: confidence-ranked with main (green), alt (yellow), weakest (red) badges",
+      "The main drop is always the highest-confidence candidate; alternates stay one click away, and song titles are editable in place",
+    ],
+  },
+  {
     version: "0.5.0",
     date: "2026-07-04",
     title: "Full DJ sets & faster renders",

@@ -64,9 +64,11 @@ def extract_wav(video_path: Path, out_wav: Path, sr: int = 44100) -> Path:
     out_wav.parent.mkdir(parents=True, exist_ok=True)
     if out_wav.exists():
         return out_wav
+    # float32: hot masters (festival sets) decode ABOVE full scale; a 16-bit
+    # WAV hard-clips those peaks before any downstream gain-down can help.
     cmd = [
         "ffmpeg", "-y", "-i", str(video_path),
-        "-vn", "-ac", "2", "-ar", str(sr), "-acodec", "pcm_s16le",
+        "-vn", "-ac", "2", "-ar", str(sr), "-acodec", "pcm_f32le",
         str(out_wav),
     ]
     subprocess.run(cmd, check=True, capture_output=True)
@@ -153,7 +155,7 @@ def _snap_to_downbeat(t: float, downbeats: list[float]) -> float:
     return min(downbeats, key=lambda d: abs(d - t))
 
 
-DROPS_VERSION = 5
+DROPS_VERSION = 7
 
 
 def find_drops(
@@ -162,6 +164,9 @@ def find_drops(
     bpm: float,
     max_drops: int | None = None,
     min_separation_s: float = 30.0,
+    offset: float = 0.0,
+    duration: float | None = None,
+    min_start_s: float = 15.0,
 ) -> list[dict[str, Any]]:
     """Detect EDM drop *moments* — the points where energy jumps from a
     quiet section (buildup/breakdown) into a loud section (the main drop).
@@ -179,10 +184,17 @@ def find_drops(
     import librosa
     from scipy.signal import butter, find_peaks, sosfiltfilt
 
-    y, sr = librosa.load(str(wav_path), sr=22050, mono=True)
+    # offset/duration: detect within a slice (per-song segments of a set) —
+    # global thresholds/spacing miss drops in quieter or shorter songs.
+    y, sr = librosa.load(
+        str(wav_path), sr=22050, mono=True,
+        offset=max(0.0, offset), duration=duration,
+    )
     duration = len(y) / sr
     if y.size == 0:
         return []
+    if offset > 0:
+        downbeats = [float(d) - offset for d in downbeats if offset <= float(d) <= offset + duration]
 
     # Full DJ sets need one drop per track, not a handful for the whole
     # hour: scale the cap with duration (a normal single stays at 5).
@@ -345,6 +357,36 @@ def find_drops(
         off = a0 + (int(np.argmax(d)) if d.size else 0)
         return float(librosa.frames_to_time(w0 + off + 1, sr=sr, hop_length=hop))
 
+    def _slam_validate(kick_t: float) -> float:
+        """The kick anchor must sit ON the drop slam — the biggest low-band
+        energy STEP nearby. Long noisy risers can bias the jump-score peak
+        (and thus the refined kick) a beat or two EARLY, into the quiet
+        breath; the mix seam then lands before the actual drop (No Heroes:
+        detection said 1577.5, the slam is at 1578.47). Only re-anchors when
+        a decisively bigger step exists ahead."""
+        fps_ = sr / hop
+        pre = max(1, int(0.4 * fps_))
+        post = max(1, int(0.6 * fps_))
+        w0 = max(pre, int((kick_t - 0.6) * fps_))
+        w1 = min(len(rms_low_smooth) - post, int((kick_t + 2.0) * fps_))
+        if w1 - w0 < 8:
+            return kick_t
+        cs = np.concatenate([[0.0], np.cumsum(rms_low_smooth)])
+
+        def _step(j: np.ndarray | int):
+            return (cs[j + post] - cs[j]) / post - (cs[j] - cs[j - pre]) / pre
+
+        js = np.arange(w0, w1)
+        steps = _step(js)
+        jb = int(js[int(np.argmax(steps))])
+        j0 = min(max(w0, int(kick_t * fps_)), w1 - 1)
+        cur = float(_step(j0))
+        best = float(np.max(steps))
+        slam_t = jb / fps_
+        if best >= 1.5 * max(cur, 1e-9) and slam_t - kick_t > 0.25:
+            return _refine_kick(slam_t)
+        return kick_t
+
     def _snap_end_to_kick_grid(end_t: float) -> float:
         """Cut exactly one kick-period after the clip's last true kick before
         `end_t`. Absolute `kick + n_bars * bar_s` math drifts with any BPM
@@ -377,7 +419,7 @@ def find_drops(
     for idx in order:
         peak_idx = int(peaks[idx])
         drop_t = float(librosa.frames_to_time(peak_idx, sr=sr, hop_length=hop))
-        if drop_t < 15.0:
+        if drop_t < min_start_s:
             continue
 
         # PHRASE-QUANTIZED cut: EDM sections are 4/8/16-bar phrases, so the
@@ -394,6 +436,7 @@ def find_drops(
         # downbeat grid put clip ends a fraction of a beat off the true kicks,
         # which made mix transitions stumble.
         kick_t = _refine_kick(kick_t)
+        kick_t = _slam_validate(kick_t)
 
         natural_end = _scan_drop_end(peak_idx)
         sustain_s = max(0.0, natural_end - kick_t)
@@ -488,6 +531,21 @@ def find_drops(
     drops.sort(key=lambda d: -d["score"])
     drops = drops[:max_drops]
     drops.sort(key=lambda d: d["start_s"])
+    if offset > 0:
+        for d in drops:
+            d["start_s"] += offset
+            d["end_s"] += offset
+            if d.get("kick_s") is not None:
+                d["kick_s"] += offset
+    elif drops:
+        # Whole-track mode (uncued playlist tracks): same main/alt +
+        # confidence marking the set flow gets, so the UI and auto-mix
+        # behave identically everywhere.
+        mx = max(float(d.get("score", 0.0)) for d in drops)
+        for d in drops:
+            d["confidence"] = round(0.55 + 0.45 * float(d.get("score", 0.0)) / max(mx, 1e-9), 2)
+            d["primary"] = False
+        max(drops, key=lambda d: float(d.get("confidence") or 0.0))["primary"] = True
     return drops
 
 
@@ -669,15 +727,75 @@ def apply_cues(
     cues: list[dict[str, Any]],
     wav_path: Path | None = None,
     bpm: float = 0.0,
+    downbeats: list[float] | None = None,
 ) -> list[dict[str, Any]]:
-    """Label drops with cues, keep the BEST drop per cue segment, and (when
-    the wav is available) synthesize a drop for any timed segment the global
-    detector missed — the tracklist says a song is there, so it gets one."""
+    """Label drops with cues; one PRIMARY drop per song plus alternates.
+
+    With wav + downbeats available, detection reruns PER SEGMENT (slice of
+    the wav, segment-local thresholds): the global pass misses drops in
+    quieter/shorter songs and can leave a segment with only a bogus
+    candidate at its boundary (Memories: sole candidate at 91s of a 97s
+    chapter — the transition into the next song, not the drop)."""
+    timed_all = [c for c in cues if c.get("t_s") is not None]
+    if wav_path is not None and downbeats is not None and timed_all:
+        out: list[dict[str, Any]] = []
+        for ci, c in enumerate(timed_all):
+            t0 = float(c["t_s"])
+            t1 = float(timed_all[ci + 1]["t_s"]) if ci + 1 < len(timed_all) else t0 + 150.0
+            if t1 - t0 < 45.0:
+                continue  # DJ tools (acappellas, teases), not songs
+            try:
+                cands = find_drops(
+                    wav_path, downbeats, bpm,
+                    max_drops=4, min_separation_s=12.0,
+                    offset=t0, duration=t1 - t0, min_start_s=1.0,
+                )
+            except Exception:
+                cands = []
+            if not cands:
+                # fall back to any global candidates in this segment
+                cands = [
+                    d for d in drops
+                    if t0 <= float(d.get("kick_s") or d.get("start_s") or -1) < t1
+                ]
+            if not cands:
+                continue
+            mx = max(float(x.get("score", 0.0)) for x in cands)
+            for x in cands:
+                x["title"] = c["title"]
+                # Confidence that this candidate is the song's real main
+                # drop. Position only matters near the boundaries: the last
+                # ~20s is the outro/transition into the next song, the very
+                # start is boundary bleed. Inside the song body, STRENGTH
+                # decides (calibrated on user ground truth: Cielito 18:31
+                # must beat both an early weak 17:20 and a loud 19:15 that
+                # sits 16s before the next song).
+                k = float(x.get("kick_s") or x.get("start_s") or t0)
+                f = (k - t0) / max(t1 - t0, 1e-9)
+                pos = 0.4 if (t1 - k) < 20.0 else 0.7 if f < 0.05 else 1.0
+                r = float(x.get("score", 0.0)) / max(mx, 1e-9)
+                x["confidence"] = round(min(1.0, pos * (0.45 + 0.55 * r)), 2)
+            # The MAIN drop is simply the highest-confidence candidate
+            # (earliest wins ties) — badge, list order and auto-mix agree.
+            pick = max(
+                cands,
+                key=lambda x: (
+                    float(x.get("confidence") or 0.0),
+                    -float(x.get("kick_s") or x.get("start_s") or 0.0),
+                ),
+            )
+            for x in cands:
+                x["primary"] = x is pick
+            out.extend(cands)
+        out.sort(key=lambda d: float(d.get("start_s", 0.0)))
+        return out
+
     for d in drops:
         d.pop("title", None)  # never keep labels from an older tracklist
     label_drops_with_cues(drops, cues)
     timed = [c for c in cues if c.get("t_s") is not None]
     best: dict[int, dict[str, Any]] = {}
+    groups: dict[int, list[dict[str, Any]]] = {}
     out: list[dict[str, Any]] = []
     for d in drops:
         ci = d.pop("_cue_i", None)
@@ -687,23 +805,57 @@ def apply_cues(
             if not timed:
                 out.append(d)
             continue
-        cur = best.get(ci)
-        if cur is None or float(d.get("score", 0)) > float(cur.get("score", 0)):
-            best[ci] = d
+        groups.setdefault(ci, []).append(d)
+    # PRIMARY drop per song: the EARLIEST strong candidate, not the loudest.
+    # A song's first main drop is the one a human editor cuts to; the
+    # max-score rule kept picking louder REPEAT drops 40s later (user
+    # ground truth: Cielito Lindo's real drop is at 18:30, not 19:15).
+    # ALL candidates stay in the list (primary=False alternates) so the UI
+    # can show them and the user can swap a wrong pick.
+    for ci, ds in groups.items():
+        mx = max(float(x.get("score", 0.0)) for x in ds)
+        # Low bar on purpose: every candidate here already passed the
+        # bass/periodicity validation gates, so any of them is a real drop —
+        # the bar only weeds out borderline blips. (0.65 missed Cielito
+        # Lindo's real drop at 0.64 of max; user ground truth.)
+        strong = [x for x in ds if float(x.get("score", 0.0)) >= 0.35 * mx]
+        pick = min(
+            strong, key=lambda x: float(x.get("kick_s") or x.get("start_s") or 0.0)
+        )
+        for x in ds:
+            x["primary"] = x is pick
+        best[ci] = pick
     if wav_path is not None and timed:
         for ci, c in enumerate(timed):
             if ci in best:
                 continue
             t0 = float(c["t_s"])
             t1 = float(timed[ci + 1]["t_s"]) if ci + 1 < len(timed) else t0 + 150.0
+            # Sub-45s segments are DJ tools (acappellas, one-phrase teases),
+            # not songs — forcing a "drop" out of them puts filler in a
+            # drops-only mix. A human editor skips them; so do we.
+            if t1 - t0 < 45.0:
+                continue
             try:
                 d = find_drop_in_window(wav_path, t0, t1, bpm)
             except Exception:
                 d = None
             if d:
                 d["title"] = c["title"]
+                d["primary"] = True
                 best[ci] = d
-    out.extend(best.values())
+    # Keep every labeled candidate (alternates included), plus synthesized
+    # primaries. Automix uses primary=True; the UI lists all of them.
+    kept: list[dict[str, Any]] = []
+    seen_ids = set()
+    for ds in groups.values():
+        for x in ds:
+            kept.append(x)
+            seen_ids.add(id(x))
+    for ci, d in best.items():
+        if id(d) not in seen_ids:
+            kept.append(d)  # synthesized for a segment with no candidates
+    out.extend(kept)
     out.sort(key=lambda d: float(d.get("start_s", 0.0)))
     return out
 

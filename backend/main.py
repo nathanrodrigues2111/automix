@@ -233,6 +233,7 @@ def _scan_tracks() -> list[dict]:
                         drops = analysis_mod.apply_cues(
                             drops, cached["cues"], wav_path=wav,
                             bpm=float(cached.get("bpm", 0.0)),
+                            downbeats=[float(x) for x in (cached.get("downbeats") or [])],
                         )
                         cached["drops"] = drops
                     db.put_analysis(fh, cached)
@@ -294,6 +295,7 @@ async def post_analyze(req: schemas.AnalyzeRequest) -> dict:
                     result.get("drops") or [], prior["cues"],
                     wav_path=wav2 if wav2.exists() else None,
                     bpm=float(result.get("bpm", 0.0)),
+                    downbeats=[float(x) for x in (result.get("downbeats") or [])],
                 )
             db.put_analysis(fh, result)
             progress("analysis", 100.0, "Analysis complete")
@@ -540,7 +542,7 @@ async def post_render(req: schemas.RenderRequest) -> dict:
                     "job_id": job_id,
                     "stage": "render",
                     "percent": 100.0,
-                    "message": "Done",
+                    "message": _done_message(record),
                     "done": True,
                     "output_path": record["output_path"],
                     "render_id": record["id"],
@@ -643,6 +645,19 @@ AUTOMIX_DEFAULT_CONFIG: dict[str, Any] = {
 }
 
 
+def _done_message(record: dict) -> str:
+    """Completion message carrying the verify guard's verdict."""
+    v = record.get("verification")
+    if not v:
+        return "Done"
+    if v.get("passed"):
+        return "Done, verified: seams, loudness and titles all pass"
+    probs = v.get("problems") or []
+    head = probs[0] if probs else "unknown problem"
+    more = f" (+{len(probs) - 1} more)" if len(probs) > 1 else ""
+    return f"Done, but verification found problems: {head}{more}"
+
+
 def _track_title(path: Path) -> str:
     meta = db.get_track_meta(analysis_mod.file_hash(path))
     if meta and meta.get("title"):
@@ -695,6 +710,16 @@ def _automix_pipeline(req: schemas.AutomixRequest, progress, cancel=None) -> dic
                         [float(d) for d in cached.get("downbeats", [])],
                         float(cached.get("bpm", 0.0)),
                     )
+                    # Fresh detection wiped the cue labels — re-apply them,
+                    # or the set-clip builder below would take every raw
+                    # drop untitled instead of one-best-per-cue.
+                    if cached.get("cues"):
+                        cached["drops"] = analysis_mod.apply_cues(
+                            cached["drops"], cached["cues"],
+                            wav_path=wav,
+                            bpm=float(cached.get("bpm", 0.0)),
+                            downbeats=[float(x) for x in (cached.get("downbeats") or [])],
+                        )
                     cached["drops_version"] = analysis_mod.DROPS_VERSION
                     db.put_analysis(fh, cached)
                 except Exception:
@@ -714,10 +739,41 @@ def _automix_pipeline(req: schemas.AutomixRequest, progress, cancel=None) -> dic
             except Exception:
                 # One bad track must not kill the whole automix.
                 continue
+        # DJ sets: pull the tracklist (YouTube chapters) automatically so
+        # every drop carries the right song title. One best drop per cue
+        # segment — that's the "right amount" for a drops-only mix of a set.
+        if cached is not None and not cached.get("cues"):
+            meta = db.get_track_meta(fh) or {}
+            vid = meta.get("video_id")
+            try:
+                dur_s = float(analysis_mod.probe_basic(path).get("duration_s") or 0.0)
+            except Exception:
+                dur_s = 0.0
+            if vid and dur_s >= 480.0:
+                try:
+                    cues = youtube_mod.fetch_cues_from_youtube(str(vid))
+                    if cues:
+                        wav = analysis_mod.WAV_CACHE_DIR / f"{fh}.wav"
+                        cached["drops"] = analysis_mod.apply_cues(
+                            cached.get("drops") or [], cues,
+                            wav_path=wav if wav.exists() else None,
+                            bpm=float(cached.get("bpm", 0.0)),
+                            downbeats=[float(x) for x in (cached.get("downbeats") or [])],
+                        )
+                        cached["cues"] = cues
+                        db.put_analysis(fh, cached)
+                        progress(
+                            "analysis", 30.0 + (i + 1) / n * 40.0,
+                            f"Labeled {sum(1 for d in cached['drops'] if d.get('title'))} drops from tracklist: {title}",
+                        )
+                except Exception:
+                    pass  # offline / no chapters — titles fall back to track title
         entries.append((fh, cached))
     progress("analysis", 70.0, f"Analysis ready for {len(entries)}/{n} tracks")
 
     # 4. Build clips: best-scoring drop per track, ordered by BPM ascending.
+    # A track WITH cues is a full DJ set: use every cue-labeled drop (one per
+    # song, in set order), each clip titled by its cue.
     clips: list[dict] = []
     # Transition style measured from the reference EDMPAPA mixes: each track
     # plays at full energy until just before the NEXT kick, then a short
@@ -727,29 +783,92 @@ def _automix_pipeline(req: schemas.AutomixRequest, progress, cancel=None) -> dic
     # the downbeat where the outgoing clip ends — beat-matched transitions.
     # The first clip keeps its full detected buildup as the mix intro.
 
+    # Optional user selection: {track_id: [kick_s, ...]} — only these drops
+    # are used for that track (UI lets the user pick among multiple drops).
+    selected_kicks: dict[str, list[float]] = {
+        str(k): [float(x) for x in v]
+        for k, v in ((req.config or {}).get("selected_kicks") or {}).items()
+    }
+
     for fh, a in entries:
         drops = a.get("drops") or []
-        if drops:
-            best = max(drops, key=lambda d: float(d.get("score", 0.0)))
-            start, end, kick = best.get("start_s"), best.get("end_s"), best.get("kick_s")
+        sel = selected_kicks.get(fh[:16])
+        if sel and drops:
+            drops = [
+                d for d in drops
+                if d.get("kick_s") is not None
+                and any(abs(float(d["kick_s"]) - s) < 0.75 for s in sel)
+            ]
+            chosen = sorted(drops, key=lambda d: float(d.get("start_s", 0.0)))
+        elif drops and a.get("cues"):
+            # Full DJ set: one clip per song (the primary drop), in set
+            # order. Non-primary alternates stay in the library list for
+            # manual swapping but don't auto-enter the mix.
+            chosen = sorted(
+                (d for d in drops if d.get("primary", True) and d.get("title")),
+                key=lambda d: float(d.get("start_s", 0.0)),
+            )
+        elif drops:
+            chosen = [
+                max(
+                    drops,
+                    key=lambda d: (
+                        float(d.get("confidence") or 0.0),
+                        float(d.get("score", 0.0)),
+                    ),
+                )
+            ]
         else:
-            start, end, kick = a.get("drop_start_s"), a.get("drop_end_s"), None
-        if start is None or end is None or float(end) <= float(start):
-            continue  # no usable drop in this track
-        clips.append(
-            {
-                "track_id": fh[:16],
-                "start_s": float(start),
-                "end_s": float(end),
-                "kick_s": float(kick) if kick is not None else None,
-                "length_bars": 16,
-                "_bpm": float(a.get("bpm", 0.0)),
-            }
+            chosen = []
+            start, end = a.get("drop_start_s"), a.get("drop_end_s")
+            if start is not None and end is not None and float(end) > float(start):
+                chosen = [{"start_s": start, "end_s": end, "kick_s": None}]
+        # DJ-set drops: give every drop a FULL 8-bar body. Detection cuts a
+        # 4-bar body when energy dips early, but with a 2-bar crossfade that
+        # leaves only ~2 bars of clean drop ("some drops are 2-3 seconds").
+        # The set is continuous audio, so extending is always safe up to the
+        # next song's chapter boundary.
+        timed_cue_ts = sorted(
+            float(c["t_s"]) for c in (a.get("cues") or []) if c.get("t_s") is not None
         )
+
+        def _extended_end(d: dict) -> float | None:
+            end = d.get("end_s")
+            kick, per = d.get("kick_s"), d.get("kick_period_s")
+            if end is None or kick is None or not a.get("cues"):
+                return end
+            bar = 4.0 * float(per) if per else 4.0 * 60.0 / float(a.get("bpm") or 128.0)
+            want = float(kick) + 8.0 * bar
+            nxt = next((t for t in timed_cue_ts if t > float(kick) + 1.0), None)
+            if nxt is not None:
+                want = min(want, nxt - 0.5)
+            return max(float(end), want)
+
+        for d in chosen:
+            start, end, kick = d.get("start_s"), _extended_end(d), d.get("kick_s")
+            if start is None or end is None or float(end) <= float(start):
+                continue  # no usable drop
+            clips.append(
+                {
+                    "track_id": fh[:16],
+                    "start_s": float(start),
+                    "end_s": float(end),
+                    "kick_s": float(kick) if kick is not None else None,
+                    "title": d.get("title") or None,
+                    "length_bars": 16,
+                    "_bpm": float(a.get("bpm", 0.0)),
+                    "_t": float(start),
+                }
+            )
     if not clips:
         raise RuntimeError("no usable drops found in any track")
-    clips.sort(key=lambda c: c["_bpm"])
+    max_clips = int((req.config or {}).get("max_clips") or 0)
+    if max_clips > 0 and len(clips) > max_clips:
+        clips = clips[:max_clips]
+    # BPM ascending across tracks; multiple clips of one track keep set order.
+    clips.sort(key=lambda c: (c["_bpm"], c["_t"]))
     for i, c in enumerate(clips):
+        c.pop("_t")
         bpm = c.pop("_bpm")
         if i > 0 and c["kick_s"] is not None:
             breath = 8.0 * 60.0 / bpm if bpm > 0 else 3.5
@@ -781,7 +900,7 @@ async def post_automix(req: schemas.AutomixRequest) -> dict:
                     "job_id": job_id,
                     "stage": "render",
                     "percent": 100.0,
-                    "message": "Done",
+                    "message": _done_message(record),
                     "done": True,
                     "output_path": record["output_path"],
                     "render_id": record["id"],
@@ -907,11 +1026,14 @@ async def get_track_clip(track_id: str, start: float, end: float):
         cmd = [
             "ffmpeg", "-y", "-ss", f"{start:.3f}", "-t", f"{dur:.3f}",
             "-i", str(src), "-vn", "-ac", "2", "-ar", "44100",
-            "-acodec", "pcm_s16le", str(tmp),
+            "-acodec", "pcm_f32le", str(tmp),
         ]
         subprocess.run(cmd, check=True, capture_output=True)
         normed = out.with_suffix(".norm.wav")
-        render_mod._loudnorm_two_pass(tmp, normed, -14.0)
+        # Same normalization the renderer uses: pure linear gain (loudnorm's
+        # dynamic mode pumps loud EDM program) + a peak safety net.
+        render_mod._normalize_linear(tmp, normed, -14.0)
+        render_mod._limit_peaks(normed, ceiling_db=-1.2)
         tmp.unlink(missing_ok=True)
         normed.rename(out)
         return out
@@ -953,12 +1075,49 @@ async def post_track_cues(track_id: str, req: TracklistRequest) -> dict:
             cached.get("drops") or [], cues,
             wav_path=wav if wav.exists() else None,
             bpm=float(cached.get("bpm", 0.0)),
+            downbeats=[float(x) for x in (cached.get("downbeats") or [])],
         )
         cached["drops"] = drops
         cached["cues"] = cues
         db.put_analysis(fh, cached)
         labeled = sum(1 for d in drops if d.get("title"))
         return {"cues": len(cues), "labeled": labeled}
+
+    try:
+        return await asyncio.to_thread(_run)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+class DropRetitleRequest(schemas.BaseModel):
+    old_title: str
+    new_title: str
+
+
+@app.post("/api/tracks/{track_id}/drops/retitle")
+async def retitle_drops(track_id: str, req: DropRetitleRequest) -> dict:
+    """Rename a song's drops (all candidates sharing the old title) plus the
+    matching tracklist cue — chapter names are sometimes wrong."""
+    path = _resolve_track_path(track_id)
+    fh = analysis_mod.file_hash(path)
+    new = req.new_title.strip()
+    if not new:
+        raise HTTPException(status_code=400, detail="title must not be empty")
+
+    def _run() -> dict:
+        cached = db.get_analysis(fh)
+        if cached is None:
+            raise ValueError("analyze the track first")
+        n = 0
+        for d in cached.get("drops") or []:
+            if (d.get("title") or "") == req.old_title:
+                d["title"] = new
+                n += 1
+        for c in cached.get("cues") or []:
+            if (c.get("title") or "") == req.old_title:
+                c["title"] = new
+        db.put_analysis(fh, cached)
+        return {"renamed": n}
 
     try:
         return await asyncio.to_thread(_run)

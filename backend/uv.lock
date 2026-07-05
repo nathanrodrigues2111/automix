@@ -90,6 +90,7 @@ source = { editable = "." }
 dependencies = [
     { name = "aiofiles" },
     { name = "fastapi" },
+    { name = "fonttools" },
     { name = "librosa" },
     { name = "numpy" },
     { name = "pydantic" },
@@ -123,6 +124,7 @@ requires-dist = [
     { name = "allin1", marker = "extra == 'ml'", specifier = ">=1.1" },
     { name = "demucs", marker = "extra == 'ml'", specifier = ">=4.0" },
     { name = "fastapi", specifier = ">=0.115" },
+    { name = "fonttools", specifier = ">=4.50" },
     { name = "httpx", marker = "extra == 'dev'", specifier = ">=0.27" },
     { name = "librosa", specifier = ">=0.10" },
     { name = "numpy", specifier = ">=1.26,<2.0" },

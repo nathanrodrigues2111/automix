@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -91,7 +92,7 @@ def _pitch_shift_wav(in_wav: Path, out_wav: Path, semitones: float) -> None:
     shifted = [pyrb.pitch_shift(y[:, c], sr, semitones) for c in range(y.shape[1])]
     minlen = min(len(c) for c in shifted)
     out = np.stack([c[:minlen] for c in shifted], axis=1)
-    sf.write(str(out_wav), out, sr)
+    sf.write(str(out_wav), out, sr, subtype="FLOAT")
 
 
 # Output canvas presets (16:9). Proxy renders force 720p regardless.
@@ -163,11 +164,13 @@ def _trim_video_clip(
 
 
 def _extract_clip_audio(src: Path, start_s: float, duration_s: float, out_wav: Path, sr: int = 44100) -> None:
+    # float32 end to end: hot sources decode above full scale, and 16-bit
+    # anywhere in the chain hard-clips them before the gain-down.
     out_wav.parent.mkdir(parents=True, exist_ok=True)
     cmd = [
         "ffmpeg", "-y", "-ss", f"{start_s:.3f}", "-i", str(src),
         "-t", f"{duration_s:.3f}",
-        "-vn", "-ac", "2", "-ar", str(sr), "-acodec", "pcm_s16le",
+        "-vn", "-ac", "2", "-ar", str(sr), "-acodec", "pcm_f32le",
         str(out_wav),
     ]
     subprocess.run(cmd, check=True, capture_output=True)
@@ -192,14 +195,14 @@ def _time_stretch_wav(in_wav: Path, out_wav: Path, ratio: float) -> None:
         stretched_channels = [pyrb.time_stretch(y[:, c], sr, rate) for c in range(y.shape[1])]
         minlen = min(len(c) for c in stretched_channels)
         out = np.stack([c[:minlen] for c in stretched_channels], axis=1)
-        sf.write(str(out_wav), out, sr)
+        sf.write(str(out_wav), out, sr, subtype="FLOAT")
         return
     # atempo factor is a speed multiplier (>1 = faster/shorter); valid 0.5-100.
     tempo = max(0.5, min(2.0, 1.0 / ratio))
     cmd = [
         "ffmpeg", "-y", "-i", str(in_wav),
         "-af", f"atempo={tempo:.6f}",
-        "-ar", "44100", "-ac", "2", str(out_wav),
+        "-ar", "44100", "-ac", "2", "-acodec", "pcm_f32le", str(out_wav),
     ]
     subprocess.run(cmd, check=True, capture_output=True)
     # atempo's output drifts by ~15-20ms per clip; seams are sample-math, so
@@ -212,7 +215,7 @@ def _time_stretch_wav(in_wav: Path, out_wav: Path, ratio: float) -> None:
         y = y[:expected]
     elif len(y) < expected:
         y = np.vstack([y, np.zeros((expected - len(y), y.shape[1]), dtype=y.dtype)])
-    sf.write(str(out_wav), y, out_sr)
+    sf.write(str(out_wav), y, out_sr, subtype="FLOAT")
 
 
 def _loudnorm_two_pass(in_wav: Path, out_wav: Path, target_lufs: float) -> None:
@@ -249,6 +252,80 @@ def _loudnorm_two_pass(in_wav: Path, out_wav: Path, target_lufs: float) -> None:
     subprocess.run(cmd2, check=True, capture_output=True)
 
 
+def _measure_loudness(path: Path) -> dict[str, float] | None:
+    """Integrated LUFS + true peak of an audio file (loudnorm measure pass)."""
+    import re
+
+    cmd = [
+        "ffmpeg", "-i", str(path),
+        "-af", "loudnorm=I=-14:LRA=11:TP=-1.5:print_format=json",
+        "-f", "null", "-",
+    ]
+    p = subprocess.run(cmd, capture_output=True)
+    stderr = p.stderr.decode("utf-8", errors="ignore")
+    m = re.search(r"\{[^{}]*\"input_i\"[^{}]*\}", stderr)
+    if not m:
+        return None
+    try:
+        data = json.loads(m.group(0))
+        i = float(data["input_i"])
+        tp = float(data["input_tp"])
+    except Exception:
+        return None
+    if not (np.isfinite(i) and np.isfinite(tp)):
+        return None
+    return {"i": i, "tp": tp}
+
+
+def _normalize_linear(in_wav: Path, out_wav: Path, target_lufs: float) -> None:
+    """Loudness-normalize with a PURE linear gain. loudnorm's dynamic mode
+    (single-pass, or two-pass when the linear gain would violate the TP
+    ceiling) pumps and distorts loud EDM program — that's the "blown out"
+    sound. A measured constant gain never alters dynamics; output is float32
+    WAV so gained peaks keep full headroom (the final-mix limiter is the one
+    place peaks get controlled)."""
+    m = _measure_loudness(in_wav)
+    gain_db = (target_lufs - m["i"]) if m else 0.0
+    cmd = [
+        "ffmpeg", "-y", "-i", str(in_wav),
+        "-af", f"volume={gain_db:.4f}dB",
+        "-ar", "44100", "-ac", "2", "-acodec", "pcm_f32le",
+        str(out_wav),
+    ]
+    subprocess.run(cmd, check=True, capture_output=True)
+
+
+def _limit_peaks(wav: Path, ceiling_db: float = -1.2) -> None:
+    """Length-preserving lookahead peak limiter (numpy, in place). Engages
+    only above the ceiling, so normal program passes bit-identical — it's a
+    safety net for crossfade overlap sums, not a loudness tool. ffmpeg's
+    alimiter is avoided because its lookahead delays the stream a few ms,
+    which would break the sample-exact seam math."""
+    import soundfile as sf
+    from scipy.ndimage import minimum_filter1d, uniform_filter1d
+
+    ceiling = 10.0 ** (ceiling_db / 20.0)
+    y, sr = sf.read(str(wav), always_2d=True, dtype="float32")
+    mag = np.max(np.abs(y), axis=1)
+    peak = float(mag.max()) if mag.size else 0.0
+    if peak <= ceiling:
+        return
+    need = np.minimum(1.0, ceiling / np.maximum(mag, 1e-9))
+    # The min-filter window must be WIDER than the smoothing window, or the
+    # smoothing averages the dip back up and the transient hard-clips at the
+    # np.clip below instead of limiting cleanly. Wide min (~50ms) + short
+    # smooth (~6ms ramps) preserves full dip depth at the peak.
+    la = max(1, int(0.003 * sr))
+    win = max(1, int(0.050 * sr))
+    g = minimum_filter1d(need, size=win + 2 * la, mode="nearest")
+    g = uniform_filter1d(g, size=2 * la + 1, mode="nearest")
+    y *= g[:, None]
+    # Smoothing can overshoot the ceiling by a hair right at a peak — the
+    # final clip is a guarantee, engaging only within fractions of a dB.
+    np.clip(y, -ceiling, ceiling, out=y)
+    sf.write(str(wav), y, sr, subtype="FLOAT")
+
+
 def _equal_power_crossfade(a_wav: Path, b_wav: Path, crossfade_s: float, out_wav: Path) -> None:
     import soundfile as sf
 
@@ -260,7 +337,7 @@ def _equal_power_crossfade(a_wav: Path, b_wav: Path, crossfade_s: float, out_wav
     n_fade = min(n_fade, len(a), len(b))
     if n_fade <= 0:
         out = np.concatenate([a, b], axis=0)
-        sf.write(str(out_wav), out, sr)
+        sf.write(str(out_wav), out, sr, subtype="FLOAT")
         return
     fade = np.linspace(0, np.pi / 2, n_fade)
     # Asymmetric blend: the outgoing decays fast while the incoming rises
@@ -273,12 +350,12 @@ def _equal_power_crossfade(a_wav: Path, b_wav: Path, crossfade_s: float, out_wav
     fade_in = (np.sin(fade) ** 0.85)[:, None]
     tail = a[-n_fade:] * fade_out
     head = b[:n_fade] * fade_in
+    # No peak clamp here: the mix stays float (full headroom) and the final
+    # limiter handles the rare overlap sum above the ceiling. Scaling the
+    # whole crossfade region down audibly ducked transitions.
     mixed = tail + head
-    peak = float(np.max(np.abs(mixed))) if mixed.size else 0.0
-    if peak > 0.999:
-        mixed *= 0.999 / peak
     out = np.concatenate([a[:-n_fade], mixed, b[n_fade:]], axis=0)
-    sf.write(str(out_wav), out, sr)
+    sf.write(str(out_wav), out, sr, subtype="FLOAT")
 
 
 def _eq_bass_swap_crossfade(
@@ -339,11 +416,8 @@ def _eq_bass_swap_crossfade(
         bass[half:] = b_h_b[half:]
 
     mixed = tail + head + bass
-    peak = float(np.max(np.abs(mixed))) if mixed.size else 0.0
-    if peak > 0.999:
-        mixed *= 0.999 / peak
     out = np.concatenate([a_full[:-n_fade], mixed, b_full[n_fade:]], axis=0)
-    sf.write(str(out_wav), out, sr)
+    sf.write(str(out_wav), out, sr, subtype="FLOAT")
 
 
 def _stem_aware_crossfade(
@@ -404,7 +478,7 @@ def _stem_aware_crossfade(
     head = _build_head(b_d, b_b, b_v, b_o)
     mixed = tail + head
     out = np.concatenate([a_full[:-n_fade], mixed, b_full[n_fade:]], axis=0)
-    sf.write(str(out_wav), out, sr)
+    sf.write(str(out_wav), out, sr, subtype="FLOAT")
 
 
 def _separate_clip_stems(src_stems_dir: Path, start_s: float, duration_s: float, ratio: float, out_dir: Path) -> dict[str, Path] | None:
@@ -468,15 +542,16 @@ def _probe_duration(path: Path) -> float:
 
 
 def compute_title_windows(
-    durations: list[float], crossfades_s: list[float]
+    durations: list[float], crossfades_s: list[float], switch_at: str = "end"
 ) -> list[tuple[float, float]]:
     """Per-part [start, end) windows in the FINAL (post-xfade) timeline.
 
-    Uses the same offset math as _xfade_videos: part i starts at
-    s_i = s_{i-1} + d_{i-1} - cf_{i-1}; the title switches at each xfade
-    END (offset_i + cf_i) — that's exactly where the incoming clip's kick
-    slams in, so the new title lands ON the drop. Pure function so it's
-    unit-testable.
+    Uses the same offset math as the video concat: part i starts at
+    s_i = s_{i-1} + d_{i-1} - cf_{i-1}. switch_at="end": the title switches
+    at each xfade END (where the incoming kick slams — matches faded video).
+    switch_at="start": switches at the xfade START — matches hard-cut video,
+    where the incoming track's picture appears when its build enters.
+    Pure function so it's unit-testable.
     """
     if not durations:
         return []
@@ -487,7 +562,7 @@ def compute_title_windows(
     for i in range(1, len(durations)):
         cf = max(0.05, crossfades_s[i - 1])
         offset = max(0.0, cumulative - cf)
-        switches.append(offset + cf)
+        switches.append(offset if switch_at == "start" else offset + cf)
         cumulative = cumulative + durations[i] - cf
     total = cumulative
     windows: list[tuple[float, float]] = []
@@ -497,6 +572,157 @@ def compute_title_windows(
         windows.append((prev, end))
         prev = end
     return windows
+
+
+# ---------- Title fitting ----------
+# Titles must sit comfortably inside the bottom bar: never touch the frame
+# edges, and keep generous breathing room so even a full-width title doesn't
+# look cramped.
+_TITLE_MARGIN_X = 160          # px of clear space each side at 1080p
+_TITLE_MAX_W = _BRAND_W - 2 * _TITLE_MARGIN_X
+_TITLE_MIN_FONT = 40           # below this a single line becomes unreadable
+_TITLE_TWO_LINE_FONT = 44      # cap when wrapping to two lines
+_TITLE_TWO_LINE_MIN = 34
+
+_font_metrics_cache: dict[str, Any] | None = None
+
+
+def _font_metrics() -> dict[str, Any] | None:
+    """Advance widths of the title font, for exact text measurement."""
+    global _font_metrics_cache
+    if _font_metrics_cache is not None:
+        return _font_metrics_cache
+    try:
+        from fontTools.ttLib import TTFont
+
+        f = TTFont(str(FONT_PATH), lazy=True)
+        upem = float(f["head"].unitsPerEm)
+        hmtx = f["hmtx"]
+        cmap = f.getBestCmap()
+        widths = {cp: float(hmtx[g][0]) for cp, g in cmap.items()}
+        os2 = f["OS/2"]
+        # libass (like VSFilter/GDI) maps ASS Fontsize to the font's cell
+        # height (usWinAscent + usWinDescent), not to unitsPerEm.
+        cell = float(os2.usWinAscent + os2.usWinDescent) or upem
+        _font_metrics_cache = {
+            "upem": upem,
+            "widths": widths,
+            "default": widths.get(ord("H"), upem * 0.5),
+            "scale": upem / cell,
+        }
+    except Exception:
+        _font_metrics_cache = None
+    return _font_metrics_cache
+
+
+def _text_width_px(text: str, font_size: float) -> float:
+    """Rendered pixel width of `text` at ASS Fontsize `font_size` (PlayRes
+    pixels). Falls back to a Bebas-ish heuristic if fontTools is missing."""
+    m = _font_metrics()
+    if not m:
+        return len(text) * font_size * 0.48
+    units = sum(m["widths"].get(ord(ch), m["default"]) for ch in text)
+    return units / m["upem"] * font_size * m["scale"]
+
+
+_TITLE_KEEP_PAREN_RE = re.compile(
+    r"\b(remix|edit|mix|mashup|vip|bootleg|rework|version|cover|flip)\b",
+    re.IGNORECASE,
+)
+_TITLE_FEAT_RE = re.compile(
+    r"\s+(?:feat\.?|ft\.?|featuring)\s+[^-()\[\]]+?(?=\s+-\s|\s+x\s|\s*[(\[]|$)",
+    re.IGNORECASE,
+)
+
+
+def _shorten_title_steps(title: str) -> list[str]:
+    """Progressively shorter versions of a title, mildest reduction first.
+    Every step keeps the actual artist/track identity — only decorations
+    (junk parentheticals, feat credits, overlong mashup chains) are dropped."""
+    steps: list[str] = []
+
+    def _push(s: str) -> None:
+        s = re.sub(r"\s+", " ", s).strip(" -–—x").strip()
+        if s and s not in steps:
+            steps.append(s)
+
+    cur = title
+    # 1. Drop parentheticals that don't identify the version ("(Official
+    #    Sunburn Goa 2015 Anthem)", "(Gladiator OST)", "(Free Fire ... Song)").
+    def _paren_sub(m: re.Match) -> str:
+        return m.group(0) if _TITLE_KEEP_PAREN_RE.search(m.group(1)) else " "
+
+    cur2 = re.sub(r"[\(\[]([^\)\]]*)[\)\]]", _paren_sub, cur)
+    _push(cur2)
+    cur = cur2 if cur2.strip() else cur
+    # 2. Drop feat credits ("KSHMR ft. Jake Reese - ..." -> "KSHMR - ...").
+    cur2 = _TITLE_FEAT_RE.sub("", cur)
+    _push(cur2)
+    cur = cur2 if cur2.strip() else cur
+    # 3. Mashup chains: keep the first two components (+ the mashup credit).
+    parts = re.split(r"\s+x\s+", cur, flags=re.IGNORECASE)
+    if len(parts) > 2:
+        credit = ""
+        m = re.search(r"([\(\[][^\)\]]*mashup[^\)\]]*[\)\]])\s*$", cur, re.IGNORECASE)
+        if m:
+            credit = " " + m.group(1)
+            parts = [re.sub(re.escape(m.group(1)), "", p).strip() for p in parts]
+        _push(" x ".join(parts[:2]) + credit)
+    return steps
+
+
+def fit_title(title: str, max_w: int = _TITLE_MAX_W, base_size: int = _TITLE_FONT_SIZE) -> tuple[list[str], int]:
+    """Fit a title inside `max_w`: full text at the base size when possible,
+    then progressively shortened (identity-preserving), then scaled down,
+    then wrapped to two lines. Returns (lines, font_size); measurement is on
+    the uppercased text exactly as the caps-only style renders it."""
+
+    def _w(s: str, size: float) -> float:
+        return _text_width_px(s.upper(), size)
+
+    if _w(title, base_size) <= max_w:
+        return [title], base_size
+
+    candidates = [title] + _shorten_title_steps(title)
+    # Any shortened variant that fits at full size wins.
+    for c in candidates[1:]:
+        if _w(c, base_size) <= max_w:
+            return [c], base_size
+
+    # Scale the shortest variant down (not below the readability floor).
+    shortest = min(candidates, key=lambda s: _w(s, base_size))
+    for size in range(base_size - 2, _TITLE_MIN_FONT - 1, -2):
+        if _w(shortest, size) <= max_w:
+            return [shortest], size
+
+    # Two lines: split at the best boundary (" x " for mashups, else the
+    # word nearest the middle), sized so both lines fit.
+    parts = re.split(r"\s+x\s+", shortest, flags=re.IGNORECASE)
+    words = shortest.split()
+    if len(parts) >= 2:
+        cut = len(parts) // 2
+        lines = [" x ".join(parts[:cut]), " x ".join(parts[cut:])]
+    elif len(words) >= 2:
+        best_i, best_d = 1, float("inf")
+        for i in range(1, len(words)):
+            d = abs(_w(" ".join(words[:i]), 10) - _w(" ".join(words[i:]), 10))
+            if d < best_d:
+                best_i, best_d = i, d
+        lines = [" ".join(words[:best_i]), " ".join(words[best_i:])]
+    else:
+        lines = [shortest]  # one unsplittable word: trim it below
+    for size in range(_TITLE_TWO_LINE_FONT, _TITLE_TWO_LINE_MIN - 1, -2):
+        if all(_w(ln, size) <= max_w for ln in lines):
+            return lines, size
+
+    # Last resort (should never trigger): hard-trim the longer line.
+    size = _TITLE_TWO_LINE_MIN
+    out = []
+    for ln in lines:
+        while ln and _w(ln + "…", size) > max_w:
+            ln = ln[:-1].rstrip()
+        out.append(ln + ("…" if ln != lines[len(out)] else ""))
+    return out, size
 
 
 def _ass_escape(text: str) -> str:
@@ -547,10 +773,14 @@ def _write_title_ass(title_windows: list[tuple[str, float, float]], out_ass: Pat
     for title, start_s, end_s in title_windows:
         if end_s <= start_s:
             continue
-        txt = _ass_escape(title.upper())
+        # Fit inside the safe width: shorten (identity-preserving), scale,
+        # or wrap to two lines — a raw long title would run off-frame.
+        fit_lines, font_size = fit_title(title)
+        txt = "\\N".join(_ass_escape(ln.upper()) for ln in fit_lines)
+        size_tag = f"\\fs{font_size}" if font_size != _TITLE_FONT_SIZE else ""
         lines.append(
             f"Dialogue: 0,{_ass_time(start_s)},{_ass_time(end_s)},Title,,0,0,0,,"
-            f"{{\\pos({_BRAND_W // 2},{y_center})}}{txt}"
+            f"{{\\pos({_BRAND_W // 2},{y_center}){size_tag}}}{txt}"
         )
     out_ass.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
@@ -737,6 +967,85 @@ def _xfade_videos(
     subprocess.run(cmd, check=True, capture_output=True)
 
 
+def _cut_concat_videos(
+    parts: list[Path],
+    crossfades_s: list[float],
+    out_path: Path,
+    durations: list[float],
+    proxy: bool = False,
+    intermediate: bool = False,
+    fps: float = 30.0,
+) -> None:
+    """HARD-CUT video timeline (the audio still crossfades underneath).
+
+    Each cut lands at the crossfade START: the moment the incoming track's
+    build becomes audible you're already WATCHING the incoming track, and
+    its kick then slams on screen. (Cutting at the fade end — after the
+    whole transition — felt jarring; cutting when the transition begins is
+    how a human edits it.)
+
+    Segment math: clip i's video starts at the mix position where its audio
+    enters (fade start = seam - cf), playing from its own beginning, until
+    the next fade start. Segment lengths are frame-quantized with ERROR
+    DIFFUSION so late cuts can't drift off the audio timeline (47 clips ×
+    ±half frame adds up)."""
+    if not parts:
+        raise ValueError("no parts")
+    if len(parts) == 1:
+        shutil.copy(parts[0], out_path)
+        return
+    if len(crossfades_s) != len(parts) - 1:
+        raise ValueError("crossfades count must be len(parts) - 1")
+
+    # Absolute cut times on the audio timeline (fade STARTs).
+    cuts: list[float] = []
+    cum = durations[0]
+    for i in range(1, len(parts)):
+        cf = max(0.05, crossfades_s[i - 1])
+        cuts.append(cum - cf)
+        cum = cum + durations[i] - cf
+    total = cum
+
+    inputs: list[str] = []
+    for p in parts:
+        inputs.extend(["-i", str(p)])
+
+    filter_parts: list[str] = []
+    labels: list[str] = []
+    v_cursor = 0.0  # frame-quantized running video time
+    for i in range(len(parts)):
+        target_end = cuts[i] if i < len(cuts) else total
+        want_len = target_end - v_cursor
+        seg_len = round(want_len * fps) / fps if i < len(cuts) else want_len
+        seg_len = max(1.0 / fps, seg_len)
+        v_cursor += seg_len
+        lbl = f"c{i}"
+        # Freeze-frame pad so audio-derived lengths can never underrun.
+        filter_parts.append(
+            f"[{i}:v]tpad=stop_mode=clone:stop_duration=2.0,"
+            f"trim=start=0:end={seg_len:.4f},"
+            f"setpts=PTS-STARTPTS[{lbl}]"
+        )
+        labels.append(lbl)
+    filter_parts.append(
+        "".join(f"[{l}]" for l in labels) + f"concat=n={len(labels)}:v=1:a=0[vout]"
+    )
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    cmd = [
+        "ffmpeg", "-y",
+        *inputs,
+        "-filter_complex", ";".join(filter_parts),
+        "-map", "[vout]",
+        "-an",
+        *_x264_encode_args(proxy, intermediate),
+        "-pix_fmt", "yuv420p",
+        "-movflags", "+faststart",
+        str(out_path),
+    ]
+    subprocess.run(cmd, check=True, capture_output=True)
+
+
 def _overlay_intro(
     video: Path,
     intro: Path,
@@ -780,9 +1089,11 @@ def _overlay_intro(
 
 
 def _append_black_outro(video: Path, outro_s: float, work: Path) -> None:
-    """Append a black + silent outro for YouTube end screens (they occupy
-    the last 5-20s of a video, so 20s is the standard reservation). Encodes
-    a matching black segment and concat-copies it — no full re-encode."""
+    """Append a black VIDEO-ONLY outro segment for YouTube end screens (they
+    occupy the last 5-20s of a video). Runs BEFORE the audio mux; the
+    matching silence is appended to the final WAV instead — concat-copying
+    AAC streams dropped the encoder-delay edit list and shifted the whole
+    mix audio one AAC frame (~23ms) late against the video and every seam."""
     try:
         info = ffprobe_streams(video)
     except Exception:
@@ -794,11 +1105,10 @@ def _append_black_outro(video: Path, outro_s: float, work: Path) -> None:
     cmd = [
         "ffmpeg", "-y",
         "-f", "lavfi", "-i", f"color=black:s={w}x{h}:r={fps}",
-        "-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo",
         "-t", f"{outro_s:.3f}",
         "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
         "-pix_fmt", "yuv420p",
-        "-c:a", "aac", "-b:a", "320k", "-ar", "44100", "-ac", "2",
+        "-an",
         str(black),
     ]
     subprocess.run(cmd, check=True, capture_output=True)
@@ -1046,16 +1356,10 @@ def render_mix(
         shifted_audio = clip_dir / "audio_shifted.wav"
         _pitch_shift_wav(stretched_audio, shifted_audio, pitch_shifts[idx])
         normed_audio = clip_dir / "audio.wav"
-        if proxy:
-            # Single-pass loudnorm for speed.
-            cmd = [
-                "ffmpeg", "-y", "-i", str(shifted_audio),
-                "-af", f"loudnorm=I={target_lufs}:LRA=11:TP=-1.5",
-                "-ar", "44100", "-ac", "2", str(normed_audio),
-            ]
-            subprocess.run(cmd, check=True, capture_output=True)
-        else:
-            _loudnorm_two_pass(shifted_audio, normed_audio, target_lufs)
+        # Linear gain only (proxy and full alike): loudnorm's dynamic mode
+        # pumped/distorted loud EDM program ("blown out"). Float output keeps
+        # headroom; the final-mix limiter owns peak control.
+        _normalize_linear(shifted_audio, normed_audio, target_lufs)
 
         # Stems: trim cached full-track stems, stretch, pitch-shift.
         stems = None
@@ -1109,80 +1413,79 @@ def render_mix(
             return min(buildup, default_crossfade_s)
         return default_crossfade_s
 
-    def _kick_align_crossfade(a_wav: Path, b_wav: Path, planned_cf: float, kb_expected: float) -> float:
+    def _kick_align_crossfade(
+        a_wav: Path,
+        b_wav: Path,
+        planned_cf: float,
+        kb_expected: float,
+        period_hint: float | None = None,
+        grid_t0: float | None = None,
+        seam_info: dict | None = None,
+    ) -> float:
         """Nudge the crossfade length so the incoming clip's first drop kick
-        lands exactly on the outgoing audio's measured kick grid. All the
-        upstream anchors (BPM estimates, kick refinement, seek/stretch
-        rounding) carry small deterministic biases that stack into an audible
-        0.1-0.4 beat stumble; measuring both FINAL wavs with the same method
-        cancels them out."""
+        lands exactly on the outgoing audio's KICK grid.
+
+        Kick-aware version: this material (festival sets) carries heavy
+        off-beat sub-bass stabs, and raw low-band peak trains lock onto them
+        half a beat off the groove. So (a) the grid period comes from the
+        outgoing drop's least-squares kick_period_s when available, and (b)
+        the grid PHASE is fitted by maximizing envelope ATTACK (positive
+        slope) at grid positions — kicks punch, bass stabs swell, so attack
+        votes across ~24 beats pick the on-beats reliably."""
         try:
             import soundfile as sf
-            from scipy.signal import butter, sosfiltfilt, find_peaks
 
-            def _env(path: Path, t0: float, t1: float):
-                y, esr = sf.read(str(path), always_2d=True)
-                y = y.mean(axis=1)
-                s0, s1 = int(max(0.0, t0) * esr), min(len(y), int(t1 * esr))
-                y = y[s0:s1]
-                sos = butter(4, 150.0, btype="lowpass", fs=esr, output="sos")
-                yl = sosfiltfilt(sos, y)
-                ehop = 512
-                n = len(yl) // ehop
-                env = np.sqrt(np.mean(yl[: n * ehop].reshape(n, ehop) ** 2, axis=1))
-                return env, esr, ehop, max(0.0, t0)
-
-            def _peak_times(env, esr, ehop, off, prom):
-                pk, _ = find_peaks(
-                    env, distance=max(1, int(0.25 * esr / ehop)), prominence=prom
-                )
-                out = []
-                for pi in pk:
-                    i0 = int(pi)
-                    o = 0.0
-                    if 0 < i0 < len(env) - 1:
-                        a_, m_, c_ = env[i0 - 1], env[i0], env[i0 + 1]
-                        den = a_ - 2 * m_ + c_
-                        if abs(den) > 1e-12:
-                            o = float(np.clip(0.5 * (a_ - c_) / den, -0.5, 0.5))
-                    out.append((i0 + o) * ehop / esr + off)
-                return np.asarray(out)
+            from verify import _attack_curve, _attack_kick_near, _fit_kick_grid, _lowband_env
 
             info = sf.info(str(a_wav))
             a_len = info.frames / info.samplerate
-            # Search up to 14s back: a drop that dies early leaves no kicks
-            # right at the end, but its steady grid further back still
-            # defines where the next kick belongs.
-            env, esr, ehop, off = _env(a_wav, a_len - 14.0, a_len)
-            times = _peak_times(env, esr, ehop, off, float(np.max(env)) * 0.15)
-            if len(times) < 6:
-                return planned_cf
-            ivs = np.diff(times)
-            period = float(np.median(ivs))
-            if not 0.25 <= period <= 1.0:
-                return planned_cf
-            # Anchor on the last kick that sits ON the steady grid (last kick
-            # of a run of near-period intervals) — empirically the most
-            # reliable anchor across this library; averaging approaches get
-            # dragged by the clip's own lead-in pulses.
-            ph = float(times[-1])
-            for j in range(len(ivs) - 1, -1, -1):
-                if abs(ivs[j] - period) < 0.12 * period:
-                    ph = float(times[j + 1])
-                    break
-            envb, esrb, ehopb, offb = _env(b_wav, kb_expected - 1.0, kb_expected + 1.0)
-            tb = _peak_times(envb, esrb, ehopb, offb, float(np.max(envb)) * 0.25)
-            if not len(tb):
-                return planned_cf
-            # Peak NEAREST the expected kick — the lead-in often carries a
-            # riser bass pulse a beat early, which must not win.
-            kb = float(tb[int(np.argmin(np.abs(tb - kb_expected)))])
-            # Alignment is modulo one kick period: choose the outgoing grid
-            # point that keeps the crossfade closest to plan. Picking the
-            # point nearest the clip end instead led to half-beat-ambiguous
-            # choices (and bails) whenever the needed shift was ~0.5 beats.
-            k = round((a_len + kb - planned_cf - ph) / period)
-            t_next = ph + k * period
+
+            # Outgoing grid slot at the clip end. ANALYTIC PRIOR: the drop
+            # end was cut exactly one kick period after its last kick, so a
+            # grid slot sits AT a_len — we only measure the last kick in a
+            # TIGHT ±0.12s window to cancel extraction/stretch bias (the
+            # window is too small to grab an off-beat bass stab, which sits
+            # ~half a period away and defeated the old statistical fit).
+            phi = None
+            period = float(period_hint) if period_hint and 0.2 <= period_hint <= 1.2 else None
+            if period is not None:
+                w0 = a_len - 8.0 * period
+                if grid_t0 is not None:
+                    w0 = max(w0, grid_t0)
+                env, esr, ehop, off = _lowband_env(a_wav, w0, a_len)
+                attack = _attack_curve(env)
+                for k in range(1, 5):  # a drop that dies early: walk back
+                    pred = a_len - k * period
+                    t_meas = _attack_kick_near(attack, esr, ehop, off, pred, radius=0.12)
+                    if t_meas is not None:
+                        phi = (a_len - t_meas) % period  # slot offset at a_len
+                        if phi > period / 2:
+                            phi -= period
+                        break
+            if phi is None:
+                # No hint / no measurable kick: statistical fallback.
+                w0 = a_len - 13.0
+                if grid_t0 is not None:
+                    w0 = max(w0, grid_t0)
+                env, esr, ehop, off = _lowband_env(a_wav, w0, a_len)
+                grid = _fit_kick_grid(env, esr, ehop, off, end_t=a_len, period_hint=period_hint)
+                if grid is None:
+                    print("[align] BAIL no outgoing grid")
+                    return planned_cf
+                period, phi = grid[0], grid[1]
+
+            # Incoming kick: detection's kick_s is sub-frame accurate, so a
+            # tight window again — only extraction bias needs cancelling.
+            envb, esrb, ehopb, offb = _lowband_env(b_wav, kb_expected - 0.8, kb_expected + 0.8)
+            attack_b = _attack_curve(envb)
+            kb = _attack_kick_near(attack_b, esrb, ehopb, offb, kb_expected, radius=0.12)
+            if kb is None:
+                kb = kb_expected  # trust detection; bias ≤ ~25ms uncancelled
+            # Grid slots: a_len - phi + m*period. Pick the slot keeping the
+            # crossfade closest to plan (alignment is modulo one period).
+            target = a_len + kb - planned_cf
+            m = round((target - (a_len - phi)) / period)
+            t_next = (a_len - phi) + m * period
             cf = a_len + kb - t_next
             if cf < 0.2:
                 print(
@@ -1190,9 +1493,20 @@ def render_mix(
                     f"period={period:.3f} kb={kb:.3f} t_next={t_next:.3f} a_len={a_len:.3f}"
                 )
                 return planned_cf
-            print(f"[align] cf {planned_cf:.3f} -> {cf:.3f} (Δ {cf-planned_cf:+.3f}s)")
+            if seam_info is not None:
+                # The aligner's executable promise, for the verify guard:
+                # the incoming kick will sit at (seam + kick_offset) in the
+                # final mix, on a grid of `period`.
+                seam_info.update(
+                    {"kick_offset": float(kb - cf), "period": float(period), "measured": True}
+                )
+            print(
+                f"[align] cf {planned_cf:.3f} -> {cf:.3f} (Δ {cf-planned_cf:+.3f}s, "
+                f"period={period:.4f}, phi={phi:+.3f})"
+            )
             return float(cf)
-        except Exception:
+        except Exception as e:
+            print(f"[align] BAIL error: {e}")
             return planned_cf
 
     # IMPORTANT: stem-aware crossfade functions take *full clean clips* on both
@@ -1201,19 +1515,60 @@ def render_mix(
     # subsequent merges (i>=2) we fall back to equal-power against the running
     # current_audio. Before this fix, the stem-aware branches were dropping
     # everything earlier than clip[i-1] from the mix.
+    def _clip_kick_period(idx: int) -> float | None:
+        """Outgoing clip's least-squares kick period (output time): the most
+        reliable grid period for seam alignment on syncopated material."""
+        ck = clips[idx].get("kick_s")
+        if ck is None:
+            return None
+        for d in analyses[idx].get("drops") or []:
+            if (
+                d.get("kick_period_s")
+                and d.get("kick_s") is not None
+                and abs(float(d["kick_s"]) - float(ck)) < 0.6
+            ):
+                return float(d["kick_period_s"]) * clip_ratios[idx]
+        return None
+
     current_audio = clip_audios[0]
     crossfade_durations: list[float] = []
+    seam_period_hints: list[float | None] = []
+    seam_infos: list[dict] = []
     for i in range(1, n_clips):
         _check_cancel()
         merged = work / f"merged_{i:02d}.wav"
         a_stems = clip_stems[i - 1]
         b_stems = clip_stems[i]
         cf_s = _crossfade_for(clips[i], clip_ratios[i])
+        period_hint = _clip_kick_period(i - 1)
+        seam_period_hints.append(period_hint)
         kick = clips[i].get("kick_s")
         start = clips[i].get("start_s")
         if kick is not None and start is not None and float(kick) > float(start):
             kb_expected = (float(kick) - float(start)) * clip_ratios[i]
-            cf_s = _kick_align_crossfade(current_audio, clip_audios[i], cf_s, kb_expected)
+            # Outgoing drop body start in merged time: the clip occupies the
+            # merged tail, its kick sits kb_out after its own start.
+            import soundfile as _sf
+            info_a = _sf.info(str(current_audio))
+            info_out = _sf.info(str(clip_audios[i - 1]))
+            a_len_cur = info_a.frames / info_a.samplerate
+            out_len = info_out.frames / info_out.samplerate
+            ko = clips[i - 1].get("kick_s")
+            so = clips[i - 1].get("start_s")
+            kb_out = (
+                (float(ko) - float(so)) * clip_ratios[i - 1]
+                if ko is not None and so is not None and float(ko) > float(so)
+                else 0.0
+            )
+            grid_t0 = a_len_cur - out_len + kb_out + 0.1
+            info: dict = {}
+            cf_s = _kick_align_crossfade(
+                current_audio, clip_audios[i], cf_s, kb_expected, period_hint, grid_t0,
+                seam_info=info,
+            )
+            seam_infos.append(info)
+        else:
+            seam_infos.append({})
         crossfade_durations.append(cf_s)
         can_use_stems = i == 1 and a_stems and b_stems
         if can_use_stems and use_eq_swap:
@@ -1250,57 +1605,64 @@ def render_mix(
             sf.info(str(p)).frames / sf.info(str(p)).samplerate
             for p in clip_audios
         ]
-        _xfade_videos(
-            clip_videos, crossfade_durations, concat_video,
-            proxy=proxy, durations=audio_lens,
-            intermediate=bool(brand_overlay),
-        )
+        if bool(config.get("video_cut", True)):
+            # Hard cut ON each incoming kick (user preference: a simple cut
+            # feels natural; the audio still crossfades underneath).
+            _cut_concat_videos(
+                clip_videos, crossfade_durations, concat_video,
+                durations=audio_lens, proxy=proxy,
+                intermediate=bool(brand_overlay),
+            )
+        else:
+            _xfade_videos(
+                clip_videos, crossfade_durations, concat_video,
+                proxy=proxy, durations=audio_lens,
+                intermediate=bool(brand_overlay),
+            )
 
-    # Normalize the WHOLE mix once at the end: overlap summing and the
-    # per-clip normalization can leave the final program slightly off
-    # target; this guarantees -14 LUFS / -1.5 dBTP with no clipping.
+    # Normalize the WHOLE mix once at the end: linear gain to the target,
+    # then one true-peak safety limiter. This is the ONLY place peaks are
+    # controlled — everything upstream stays float with full headroom, and
+    # no dynamic loudness processing ever touches the program (loudnorm's
+    # dynamic mode was the "blown out" sound).
     if progress:
         progress("render", 82.0, "Normalizing final mix")
     final_normed = work / "final_normed.wav"
-    if proxy:
-        subprocess.run(
-            [
-                "ffmpeg", "-y", "-i", str(final_audio),
-                "-af", f"loudnorm=I={target_lufs}:LRA=11:TP=-1.5",
-                "-ar", "44100", "-ac", "2", str(final_normed),
-            ],
-            check=True, capture_output=True,
-        )
-    else:
-        _loudnorm_two_pass(final_audio, final_normed, target_lufs)
+    _normalize_linear(final_audio, final_normed, target_lufs)
+    _limit_peaks(final_normed, ceiling_db=-1.2)
     final_audio = final_normed
 
-    # Gentle tail fade so the mix doesn't stop on a hard cut before the outro.
+    # Gentle tail fade + the outro's silence appended IN THE WAV (the black
+    # outro video is concatenated pre-mux; never concat AAC streams).
     outro_s = float(config.get("outro_s", 20.0))
     if outro_s > 0:
         try:
             import soundfile as sf
-            y_fin, sr_fin = sf.read(str(final_audio), always_2d=True)
+            y_fin, sr_fin = sf.read(str(final_audio), always_2d=True, dtype="float32")
             n_fade = min(len(y_fin), int(1.5 * sr_fin))
             if n_fade > 0:
                 curve = np.cos(np.linspace(0, np.pi / 2, n_fade))[:, None]
                 y_fin[-n_fade:] = y_fin[-n_fade:] * curve
-                sf.write(str(final_audio), y_fin, sr_fin)
+            y_fin = np.vstack(
+                [y_fin, np.zeros((int(outro_s * sr_fin), y_fin.shape[1]), dtype=y_fin.dtype)]
+            )
+            sf.write(str(final_audio), y_fin, sr_fin, subtype="FLOAT")
         except Exception:
             pass
 
     _check_cancel()
-    if progress:
-        progress("render", 93.0, "Muxing")
     ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     out_path = EXPORTS_DIR / f"automix_{ts}.mp4"
     EXPORTS_DIR.mkdir(parents=True, exist_ok=True)
+    windows: list[tuple[str, float, float]] = []
+    # VIDEO-ONLY passes first (branding, intro overlay); the audio joins in
+    # exactly ONE mux at the end. Every extra "-c:a copy" hop through an mp4
+    # risked dropping the AAC edit list — that shifted the whole track one
+    # AAC frame (~23ms) late and pushed every seam out of the perfect band.
+    video_final = concat_video
     if brand_overlay:
-        muxed = work / "muxed.mp4"
-        _mux_video_audio(concat_video, final_audio, muxed)
         if progress:
-            progress("render", 96.0, "Applying EDMPAPA branding")
-        windows: list[tuple[str, float, float]] = []
+            progress("render", 95.0, "Applying EDMPAPA branding")
         if show_titles:
             import soundfile as sf
             titles = [
@@ -1313,31 +1675,102 @@ def render_mix(
                 sf.info(str(p)).frames / sf.info(str(p)).samplerate
                 for p in clip_audios
             ]
-            spans = compute_title_windows(durations, crossfade_durations)
+            # Title always switches at the fade END — the incoming kick.
+            # The VIDEO cuts early (at the build), but the new song's name
+            # appears exactly when its drop hits (user-confirmed feel).
+            spans = compute_title_windows(durations, crossfade_durations, switch_at="end")
             if intro_dur > 0 and first_kick_out > 0 and spans:
                 # No title under the intro animation — the first title
                 # appears when the intro ends (on the first kick).
                 s0, e0 = spans[0]
                 spans[0] = (min(first_kick_out, max(s0, e0 - 0.1)), e0)
             windows = [(titles[i], s, e) for i, (s, e) in enumerate(spans)]
+        branded = work / "branded.mp4"
         _apply_branding(
-            muxed, out_path, windows, proxy,
+            concat_video, branded, windows, proxy,
             brand_start=first_kick_out if intro_dur > 0 else 0.0,
             canvas=canvas,
             intermediate=intro_dur > 0 and first_kick_out > 0,
         )
-    else:
-        _mux_video_audio(concat_video, final_audio, out_path)
+        video_final = branded
 
     if intro_dur > 0 and first_kick_out > 0:
         if progress:
             progress("render", 97.0, "Compositing intro overlay")
-        _overlay_intro(out_path, intro_path, first_kick_out, intro_dur, work, proxy)
+        _overlay_intro(video_final, intro_path, first_kick_out, intro_dur, work, proxy)
 
     if outro_s > 0:
         if progress:
-            progress("render", 98.0, "Appending YouTube outro")
-        _append_black_outro(out_path, outro_s, work)
+            progress("render", 97.5, "Appending YouTube outro")
+        _append_black_outro(video_final, outro_s, work)
+
+    _check_cancel()
+    if progress:
+        progress("render", 98.0, "Muxing")
+    _mux_video_audio(video_final, final_audio, out_path)
+
+    # Verify guard: measure the ACTUAL output (seam phase, loudness, true
+    # peak, rendered titles) so a bad mix can never silently look done.
+    verification: dict[str, Any] | None = None
+    if bool(config.get("verify", True)):
+        if progress:
+            progress("render", 99.0, "Verifying mix (seams, loudness, titles)")
+        try:
+            import soundfile as sf
+
+            import verify as verify_mod
+
+            lens_v = [
+                sf.info(str(p)).frames / sf.info(str(p)).samplerate
+                for p in clip_audios
+            ]
+            seams_v: list[float] = []
+            cursor_v = lens_v[0]
+            for i in range(1, len(lens_v)):
+                seams_v.append(cursor_v)
+                cursor_v = cursor_v + lens_v[i] - crossfade_durations[i - 1]
+            # Outgoing drop-body start per seam (final timeline), so the
+            # verifier fits its grid on the same clean span as the aligner.
+            grid_starts_v: list[float | None] = []
+            for j, seam_t in enumerate(seams_v):
+                ko = clips[j].get("kick_s")
+                so = clips[j].get("start_s")
+                kb_j = (
+                    (float(ko) - float(so)) * clip_ratios[j]
+                    if ko is not None and so is not None and float(ko) > float(so)
+                    else 0.0
+                )
+                grid_starts_v.append(seam_t - lens_v[j] + kb_j + 0.1)
+            verification = verify_mod.verify_mix(
+                out_path,
+                seams_v,
+                [float(c) for c in crossfade_durations],
+                windows,
+                target_lufs,
+                expect_titles=bool(brand_overlay and show_titles and windows),
+                period_hints=seam_period_hints,
+                grid_starts=grid_starts_v,
+                seam_infos=seam_infos,
+            )
+            ss = verification["seam_summary"]
+            loud = verification.get("loudness") or {}
+            print(
+                f"[verify] passed={verification['passed']} "
+                f"seams perfect/ok/off={ss['perfect']}/{ss['ok']}/{ss['off']} "
+                f"worst={ss['worst_phase_beats']} "
+                f"lufs={loud.get('lufs')} tp={loud.get('true_peak_db')}"
+            )
+            for prob in verification["problems"]:
+                print(f"[verify] PROBLEM: {prob}")
+            try:
+                out_path.with_suffix(".verify.json").write_text(
+                    json.dumps(verification, indent=2), encoding="utf-8"
+                )
+            except Exception:
+                pass
+        except Exception as e:
+            print(f"[verify] verification crashed: {e}")
+            verification = {"passed": False, "problems": [f"verifier crashed: {e}"]}
 
     render_id = uuid.uuid4().hex
     record = db.add_render(render_id, str(out_path.relative_to(PROJECT_ROOT)), config)
@@ -1355,6 +1788,8 @@ def render_mix(
         record["crossfades"] = [float(c) for c in crossfade_durations]
     except Exception:
         record["seam_times"] = []
+    if verification is not None:
+        record["verification"] = verification
 
     if progress:
         progress("render", 100.0, "Done")

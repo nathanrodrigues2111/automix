@@ -11,6 +11,12 @@ export interface Drop {
   score: number
   /** From a set's tracklist cues. */
   title?: string | null
+  /** For labeled sets: the auto-picked drop for its song. false = an
+   *  alternate candidate the user can swap in manually. */
+  primary?: boolean
+  /** 0-1: how confident the picker is that this candidate is the song's
+   *  real main drop (position in segment + relative strength). */
+  confidence?: number
 }
 
 export interface TrackAnalysis {

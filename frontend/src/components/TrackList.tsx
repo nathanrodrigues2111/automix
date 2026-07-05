@@ -42,6 +42,7 @@ import type { Drop, Track } from "@/api/types"
 import type { ProgressMap } from "@/hooks/useProgressSocket"
 import { displayTitle, formatDuration } from "@/lib/format"
 import { cn } from "@/lib/utils"
+import { apiUrl } from "@/lib/backend"
 import { KeyChip } from "@/components/KeyChip"
 
 interface TrackListProps {
@@ -799,18 +800,72 @@ export function TrackList({
                               variant="outline"
                               className="h-7 w-full justify-center gap-1.5 text-xs"
                               onClick={() => {
-                                drops.forEach((d) => onAdd(t, d))
+                                // Alternates (primary=false) are for manual
+                                // swapping; bulk-add takes one per song.
+                                const picks = drops.filter(
+                                  (d) => d.primary !== false,
+                                )
+                                picks.forEach((d) => onAdd(t, d))
                                 toast.success(
-                                  `Added ${drops.length} drops to the mix`,
+                                  `Added ${picks.length} drops to the mix`,
                                   { description: displayTitle(t) },
                                 )
                               }}
                             >
-                              <Plus className="h-3 w-3" /> Add all {drops.length} drops
+                              <Plus className="h-3 w-3" /> Add all{" "}
+                              {drops.filter((d) => d.primary !== false).length}{" "}
+                              drops
                             </Button>
                           </li>
                         )}
-                        {dropPairs.map(({ d, i }) => {
+                        {(() => {
+                          // Folder tree: one node per song, its drop
+                          // candidates (main + alts) nested underneath.
+                          const groups: {
+                            title: string | null
+                            items: typeof dropPairs
+                          }[] = []
+                          for (const p of dropPairs) {
+                            const g = groups[groups.length - 1]
+                            const ttl = p.d.title ?? null
+                            if (g && g.title !== null && g.title === ttl)
+                              g.items.push(p)
+                            else groups.push({ title: ttl, items: [p] })
+                          }
+                          const retitle = async (oldTitle: string) => {
+                            const next = window.prompt(
+                              "Song title for this drop group",
+                              oldTitle,
+                            )
+                            if (!next || next.trim() === oldTitle) return
+                            try {
+                              const res = await fetch(
+                                apiUrl(`/api/tracks/${t.id}/drops/retitle`),
+                                {
+                                  method: "POST",
+                                  headers: {
+                                    "Content-Type": "application/json",
+                                  },
+                                  body: JSON.stringify({
+                                    old_title: oldTitle,
+                                    new_title: next.trim(),
+                                  }),
+                                },
+                              )
+                              if (!res.ok) throw new Error(await res.text())
+                              toast.success("Title updated")
+                              qc.invalidateQueries({ queryKey: ["tracks"] })
+                            } catch {
+                              toast.error("Could not update the title")
+                            }
+                          }
+                          const renderRow = (
+                            { d, i }: (typeof dropPairs)[number],
+                            showTitle: boolean,
+                            role?: "main" | "alt" | "weak",
+                          ) => {
+                          const badgeRole =
+                            role ?? (d.primary ? "main" : "alt")
                           const dropKey = `${t.id}:${d.start_s.toFixed(2)}`
                           const isAdded = !!addedKeys?.has(dropKey)
                           const isPlayingThis = playingKey === dropKey
@@ -875,9 +930,28 @@ export function TrackList({
                                   ) : (
                                     <Zap className="h-3.5 w-3.5 shrink-0 text-amber-500 dark:text-amber-400" />
                                   )}
-                                  <span className="truncate" title={d.title ?? undefined}>
-                                    {d.title ?? `Drop ${i + 1}`}
-                                  </span>
+                                  {showTitle && (
+                                    <span className="truncate" title={d.title ?? undefined}>
+                                      {d.title ?? `Drop ${i + 1}`}
+                                    </span>
+                                  )}
+                                  {d.primary !== undefined && (
+                                    <span
+                                      className={
+                                        "shrink-0 rounded px-1 text-[10px] uppercase " +
+                                        (badgeRole === "main"
+                                          ? "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400"
+                                          : badgeRole === "alt"
+                                            ? "bg-amber-500/15 text-amber-600 dark:text-amber-400"
+                                            : "bg-red-500/15 text-red-600 dark:text-red-400")
+                                      }
+                                      title="Confidence this is the song's main drop"
+                                    >
+                                      {d.primary ? "main" : "alt"}
+                                      {d.confidence != null &&
+                                        ` ${Math.round(d.confidence * 100)}%`}
+                                    </span>
+                                  )}
                                 </span>
                                 <span className="truncate font-mono text-[11px] tabular-nums text-muted-foreground">
                                   {formatDuration(d.start_s)}–
@@ -886,7 +960,65 @@ export function TrackList({
                               </button>
                             </li>
                           )
-                        })}
+                          }
+                          return groups.map((g) =>
+                            g.title !== null && g.items.length > 1 ? (
+                              <li
+                                key={`g-${g.items[0].i}`}
+                                className="flex flex-col gap-1"
+                              >
+                                <div className="group/gt flex items-center gap-1.5 px-1 text-[11px] font-medium">
+                                  <ListMusic className="h-3 w-3 shrink-0 text-muted-foreground" />
+                                  <span className="truncate" title={g.title}>
+                                    {g.title}
+                                  </span>
+                                  <button
+                                    type="button"
+                                    className="shrink-0 rounded p-0.5 text-muted-foreground opacity-0 transition-opacity hover:text-foreground group-hover/gt:opacity-100"
+                                    title="Edit this song's title"
+                                    onClick={() => retitle(g.title!)}
+                                  >
+                                    <Pencil className="h-3 w-3" />
+                                  </button>
+                                  <span className="ml-auto shrink-0 text-[10px] text-muted-foreground">
+                                    {g.items.length} drops
+                                  </span>
+                                </div>
+                                <ul className="ml-1.5 flex flex-col gap-1 border-l border-border/60 pl-2">
+                                  {(() => {
+                                    // Most confident on top: main first,
+                                    // then alts by confidence; the weakest
+                                    // alt gets the red badge.
+                                    const sorted = [...g.items].sort(
+                                      (a, b) =>
+                                        (b.d.primary ? 1 : 0) -
+                                          (a.d.primary ? 1 : 0) ||
+                                        (b.d.confidence ?? 0) -
+                                          (a.d.confidence ?? 0),
+                                    )
+                                    const altCount = sorted.filter(
+                                      (p) => !p.d.primary,
+                                    ).length
+                                    return sorted.map((p, idx) =>
+                                      renderRow(
+                                        p,
+                                        false,
+                                        p.d.primary
+                                          ? "main"
+                                          : idx === sorted.length - 1 &&
+                                              altCount > 1
+                                            ? "weak"
+                                            : "alt",
+                                      ),
+                                    )
+                                  })()}
+                                </ul>
+                              </li>
+                            ) : (
+                              g.items.map((p) => renderRow(p, true))
+                            ),
+                          )
+                        })()}
                       </ul>
                     )
                   })()

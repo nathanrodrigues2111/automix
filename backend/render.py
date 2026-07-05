@@ -840,6 +840,168 @@ def _export_path(clips: list[dict], srcs: list[Path], config: dict) -> Path:
     return EXPORTS_DIR / f"automix_{ts}.mp4"
 
 
+# ---------- YouTube Shorts (vertical 1080x1920 with the edmpapa template) ----
+
+SHORT_TEMPLATE = ASSETS_DIR / "edmpapa.mp4"
+# The template's lightning bars leave a full-width black window between
+# these rows (measured from the asset). The center block (text bars +
+# video) is inset from the frame edges; the template is screen-blended on
+# top so its black passes through.
+_SHORT_W, _SHORT_H = 1080, 1920
+_SHORT_WIN_TOP, _SHORT_WIN_BOT = 445, 1475
+# The block (artist bar, video, track bar) is inset from the frame edges;
+# the video keeps its full 16:9 frame (NO horizontal crop) and the black
+# bars absorb the rest of the window height.
+_SHORT_INSET_X = 80
+_SHORT_VID_W = _SHORT_W - 2 * _SHORT_INSET_X  # 920
+_SHORT_VID_H = 518  # 920 x 9/16 — the whole mix frame, uncropped
+_SHORT_BAR_H = (_SHORT_WIN_BOT - _SHORT_WIN_TOP - _SHORT_VID_H) // 2  # 256
+_SHORT_VID_Y = _SHORT_WIN_TOP + _SHORT_BAR_H  # 701
+
+
+_SHORT_END_CARD_S = 3.0
+_SHORT_END_CARD_TEXT = "WATCH THE FULL MIX BELOW"
+
+
+def _short_titles_ass(
+    windows: list[tuple[str, float, float]],
+    dur: float,
+    card_start: float,
+    out_ass: Path,
+) -> None:
+    """Per-drop centered lines: artist in the top bar, track name in the
+    bottom bar, switching with the mix's title windows; then the end-card
+    line centered on black. Bebas is caps-only; long lines scale down to
+    stay inside the bar width."""
+    max_w = _SHORT_VID_W - 60
+
+    def _fs(text: str, base: int = 88) -> int:
+        if not text:
+            return base
+        return max(44, min(base, int(max_w / (0.5 * len(text)))))
+
+    def _ts(t: float) -> str:
+        t = max(0.0, t)
+        return f"{int(t // 3600)}:{int(t % 3600 // 60):02d}:{t % 60:05.2f}"
+
+    def _esc(text: str) -> str:
+        return text.strip().upper().replace("\\", "").replace("{", "(").replace("}", ")")
+
+    top_y = _SHORT_WIN_TOP + _SHORT_BAR_H // 2
+    bot_y = _SHORT_WIN_BOT - _SHORT_BAR_H // 2
+    lines = [
+        "[Script Info]",
+        "ScriptType: v4.00+",
+        f"PlayResX: {_SHORT_W}",
+        f"PlayResY: {_SHORT_H}",
+        "WrapStyle: 2",
+        "",
+        "[V4+ Styles]",
+        "Format: Name, Fontname, Fontsize, PrimaryColour, OutlineColour, "
+        "BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, "
+        "Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, "
+        "MarginR, MarginV, Encoding",
+        "Style: Short,Bebas,88,&H00FFFFFF,&H00000000,&H00000000,0,0,0,0,"
+        "100,100,1,0,1,0,0,5,10,10,10,1",
+        "",
+        "[Events]",
+        "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
+    ]
+    for title, s, e in windows:
+        if s >= card_start:
+            continue
+        e = min(e, card_start)
+        if " - " in title:
+            artist, track = title.split(" - ", 1)
+        else:
+            artist, track = "", title
+        for text, y in ((artist, top_y), (track, bot_y)):
+            txt = _esc(text)
+            if not txt:
+                continue
+            lines.append(
+                f"Dialogue: 0,{_ts(s)},{_ts(e)},Short,,0,0,0,,"
+                f"{{\\pos({_SHORT_W // 2},{y})\\fs{_fs(txt)}}}{txt}"
+            )
+    # End card: centered call-to-action on black (the template's wordmark
+    # and subscribe button stay blended over it).
+    card = _esc(_SHORT_END_CARD_TEXT)
+    lines.append(
+        f"Dialogue: 0,{_ts(card_start)},{_ts(dur)},Short,,0,0,0,,"
+        f"{{\\pos({_SHORT_W // 2},{_SHORT_H // 2})\\fs72}}{card}"
+    )
+    out_ass.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _render_short(
+    mix_video: Path,
+    mix_audio_wav: Path,
+    windows: list[tuple[str, float, float]],
+    mix_len: float,
+    main_out: Path,
+    work: Path,
+    progress: ProgressCb = None,
+) -> Path | None:
+    """Vertical Short reframing the rendered mix itself: the first minute of
+    the beat-matched mix (as many drops as fit), blurred + darkened behind a
+    centered inset video, artist/track bars switching per drop, and the
+    edmpapa template (wordmark + lightning + subscribe) screen-blended over
+    everything. Returns the output path, or None (a failed Short never
+    kills the mix)."""
+    if not SHORT_TEMPLATE.exists():
+        print(f"[short] template missing: {SHORT_TEMPLATE}")
+        return None
+    if mix_len < 5.0:
+        return None
+    # Mix content + end card together stay under the 1-minute Shorts cap.
+    card_start = min(mix_len, 59.5 - _SHORT_END_CARD_S)
+    dur = card_start + _SHORT_END_CARD_S
+
+    if progress:
+        progress("render", 98.0, "Rendering Short")
+
+    ass_path = work / "short_titles.ass"
+    _short_titles_ass(windows, dur, card_start, ass_path)
+
+    bar_bot_y = _SHORT_VID_Y + _SHORT_VID_H
+    out_path = main_out.with_name(main_out.stem + "_short.mp4")
+    filt = (
+        # Plain black canvas; the centered drop video is the only picture.
+        f"color=black:s={_SHORT_W}x{_SHORT_H}:r=30[bg];"
+        f"[0:v]fps=30,scale={_SHORT_VID_W}:{_SHORT_VID_H}:force_original_aspect_ratio=increase,"
+        f"crop={_SHORT_VID_W}:{_SHORT_VID_H}[fg];"
+        f"[bg][fg]overlay={_SHORT_INSET_X}:{_SHORT_VID_Y}:shortest=1[comp];"
+        # Fade the whole picture to black for the end card (fade holds
+        # black), pad with black in case the mix is shorter than the card.
+        f"[comp]fade=t=out:st={max(0.0, card_start - 0.35):.3f}:d=0.35,"
+        f"tpad=stop=-1:stop_mode=add:color=black,"
+        f"drawbox=x={_SHORT_INSET_X}:y={_SHORT_WIN_TOP}:w={_SHORT_VID_W}:h={_SHORT_BAR_H}:color=black:t=fill,"
+        f"drawbox=x={_SHORT_INSET_X}:y={bar_bot_y}:w={_SHORT_VID_W}:h={_SHORT_BAR_H}:color=black:t=fill,"
+        f"ass=filename='{ass_path}':fontsdir='{ASSETS_DIR}',setsar=1,format=gbrp[base];"
+        f"[1:v]fps=30,scale={_SHORT_W}:{_SHORT_H},setsar=1,format=gbrp[tpl];"
+        f"[base][tpl]blend=all_mode=screen,format=yuv420p[v];"
+        # Audio fades out into the card and pads silent underneath it.
+        f"[2:a]afade=t=out:st={max(0.0, card_start - 1.0):.3f}:d=1.0,apad[a]"
+    )
+    cmd = [
+        "ffmpeg", "-y",
+        "-t", f"{dur:.3f}", "-i", str(mix_video),
+        "-stream_loop", "-1", "-i", str(SHORT_TEMPLATE),
+        "-i", str(mix_audio_wav),
+        "-filter_complex", filt,
+        "-map", "[v]", "-map", "[a]",
+        "-t", f"{dur:.3f}",
+        *_x264_encode_args(False),
+        "-pix_fmt", "yuv420p",
+        "-c:a", "aac", "-b:a", "192k",
+        "-movflags", "+faststart",
+        str(out_path),
+    ]
+    subprocess.run(cmd, check=True, capture_output=True)
+    print(f"[short] wrote {out_path.name} ({card_start:.1f}s of the mix + end card)")
+    return out_path
+
+
 def _apply_branding(
     video_in: Path,
     out_path: Path,
@@ -1874,6 +2036,33 @@ def render_mix(
         record["seam_times"] = []
     if verification is not None:
         record["verification"] = verification
+
+    # Companion vertical Short reframing the mix itself (option: make_short).
+    if bool(config.get("make_short", True)) and not proxy:
+        try:
+            import soundfile as sf
+            lens = [
+                sf.info(str(p)).frames / sf.info(str(p)).samplerate
+                for p in clip_audios
+            ]
+            mix_len = sum(lens) - sum(crossfade_durations)
+            titles = [
+                (clips[i].get("title") or _display_title(srcs[i]))
+                for i in range(len(srcs))
+            ]
+            spans = compute_title_windows(
+                lens, crossfade_durations, switch_at="end",
+                kick_offsets=[float(si.get("kick_offset") or 0.0) for si in seam_infos],
+            )
+            short_windows = [(titles[i], s, e) for i, (s, e) in enumerate(spans)]
+            short_path = _render_short(
+                concat_video, final_audio, short_windows, mix_len,
+                out_path, work, progress,
+            )
+            if short_path is not None:
+                record["short_path"] = str(short_path.relative_to(PROJECT_ROOT))
+        except Exception as e:
+            print(f"[short] failed, keeping the main mix: {e}")
 
     if progress:
         progress("render", 100.0, "Done")

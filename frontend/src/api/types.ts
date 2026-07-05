@@ -97,6 +97,8 @@ export interface RenderConfig {
   resolution?: string
   /** Export naming: "file" (source video name + random number) | "timestamp". */
   filename_style?: string
+  /** Also render a vertical YouTube Short of the first drop. */
+  make_short?: boolean
   harmonic_pitch_shift_max_semitones: number
   proxy?: boolean
 }

@@ -421,6 +421,12 @@ export function SettingsDialog({
               checked={config.show_titles ?? true}
               onChange={(v) => setConfig({ ...config, show_titles: v })}
             />
+            <SwitchRow
+              title="YouTube Short"
+              description="Also render a vertical Short of the first drop with the EDMPAPA template"
+              checked={config.make_short ?? true}
+              onChange={(v) => setConfig({ ...config, make_short: v })}
+            />
           </section>
 
           <Separator className="bg-border/50" />

@@ -22,6 +22,7 @@ export const CHANGELOG: ChangelogEntry[] = [
       "Settings controls line up: one control height and consistent label spacing throughout",
       "Mix Editor panel is more compact with tighter padding around clips",
       "Delete all mixes in one go from the Mixes panel (with a confirm step)",
+      "YouTube Shorts: every render also produces a vertical Short with the first minute of the mix inside the EDMPAPA template, artist and track name switching with each drop, and a watch-the-full-mix end card; turn it off in Settings > Output",
     ],
   },
   {

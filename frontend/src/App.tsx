@@ -102,6 +102,7 @@ const DEFAULT_CONFIG: Omit<RenderConfig, "clips"> = {
   outro_s: 10, // black outro reserved for YouTube end screens
   resolution: "1080p", // final render canvas
   filename_style: "file", // exports named after the source video + date/time
+  make_short: true, // companion vertical Short of the first drop
   harmonic_pitch_shift_max_semitones: 0, // don't pitch-shift either
 }
 

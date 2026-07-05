@@ -640,6 +640,8 @@ AUTOMIX_DEFAULT_CONFIG: dict[str, Any] = {
     "harmonic_pitch_shift_max_semitones": 0,
     "brand_overlay": True,
     "show_titles": True,
+    # Companion vertical Short of the first drop, rendered next to the mix.
+    "make_short": True,
     # Black + silence after the mix ends, for YouTube end screens (which
     # occupy the last 5-20s of a video).
     "outro_s": 10.0,

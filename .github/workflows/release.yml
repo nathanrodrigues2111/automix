@@ -1,11 +1,12 @@
 name: Build desktop packages
 
-# Builds a self-contained Automix package for each OS/arch and, when triggered
-# by a version tag (v*), attaches them to that GitHub Release. Trigger manually
-# from the Actions tab (Run workflow) to test a build without cutting a tag.
+# Builds a self-contained Automix package for each OS/arch and attaches them to
+# the GitHub Release that triggered the run. Publish a release (or re-publish an
+# existing one) to build + upload. Trigger manually from the Actions tab (Run
+# workflow) to test a build without touching a release.
 on:
-  push:
-    tags: ["v*"]
+  release:
+    types: [published]
   workflow_dispatch:
 
 permissions:

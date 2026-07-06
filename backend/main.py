@@ -249,7 +249,7 @@ def _scan_tracks() -> list[dict]:
                     db.put_analysis(fh, cached)
                 except Exception:
                     cached["drops"] = []
-        rel = str(path.relative_to(PROJECT_ROOT))
+        rel = "videos/" + path.relative_to(VIDEOS_DIR).as_posix()
         tracks.append(
             {
                 "id": tid,
@@ -412,7 +412,7 @@ async def post_reveal(req: RevealRequest) -> dict:
     """Open the containing folder in the system file manager (local tool).
     Tries FileManager1 ShowItems (selects the file), falls back to xdg-open
     on the directory."""
-    target = (PROJECT_ROOT / req.path.lstrip("/")).resolve() if req.path else EXPORTS_DIR
+    target = (VIDEOS_DIR.parent / req.path.lstrip("/")).resolve() if req.path else EXPORTS_DIR
     if not str(target).startswith(str(VIDEOS_DIR.resolve())):
         raise HTTPException(status_code=400, detail="path outside the videos library")
     if not target.exists():

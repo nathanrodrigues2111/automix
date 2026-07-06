@@ -2092,7 +2092,7 @@ def render_mix(
             verification = {"passed": False, "problems": [f"verifier crashed: {e}"]}
 
     render_id = uuid.uuid4().hex
-    record = db.add_render(render_id, str(out_path.relative_to(PROJECT_ROOT)), config)
+    record = db.add_render(render_id, "videos/" + out_path.relative_to(VIDEOS_DIR).as_posix(), config)
     # Seam moments (each incoming drop's kick) on the final timeline — the
     # fade END of each transition. Useful for verification and UI markers.
     try:
@@ -2133,7 +2133,7 @@ def render_mix(
                 out_path, work, progress, title_font=title_font,
             )
             if short_path is not None:
-                record["short_path"] = str(short_path.relative_to(PROJECT_ROOT))
+                record["short_path"] = "videos/" + short_path.relative_to(VIDEOS_DIR).as_posix()
         except Exception as e:
             print(f"[short] failed, keeping the main mix: {e}")
 

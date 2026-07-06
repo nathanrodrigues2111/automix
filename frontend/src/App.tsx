@@ -151,7 +151,7 @@ function ThemeToggle() {
   )
 }
 
-export function RefreshTitlesButton() {
+function RefreshTitlesButton() {
   const refresh = useRefreshTitles()
   return (
     <Button
@@ -787,9 +787,12 @@ export default function App() {
               <ListMusic className="h-3.5 w-3.5" />
               Tracks
             </div>
-            <span className="rounded-md bg-secondary/50 px-1.5 py-0.5 text-[11px] tabular-nums text-muted-foreground">
-              {trackCount}
-            </span>
+            <div className="flex items-center gap-1.5">
+              {trackCount > 0 && <RefreshTitlesButton />}
+              <span className="rounded-md bg-secondary/50 px-1.5 py-0.5 text-[11px] tabular-nums text-muted-foreground">
+                {trackCount}
+              </span>
+            </div>
           </div>
           <Separator className="bg-border/40" />
           <div className="min-h-0 flex-1">{trackListEl}</div>

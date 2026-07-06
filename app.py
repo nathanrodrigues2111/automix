@@ -77,7 +77,7 @@ def _wait_until_up(port: int, timeout: float = 30.0) -> bool:
     return False
 
 
-def main_entry() -> None:
+def _launch() -> None:
     import uvicorn
 
     app = _build_app()
@@ -88,8 +88,7 @@ def main_entry() -> None:
 
     threading.Thread(target=serve, daemon=True).start()
     if not _wait_until_up(port):
-        print("Automix backend failed to start", file=sys.stderr)
-        sys.exit(1)
+        raise RuntimeError("backend did not come up on 127.0.0.1")
 
     url = f"http://127.0.0.1:{port}"
     try:
@@ -97,9 +96,10 @@ def main_entry() -> None:
 
         webview.create_window("Automix", url, width=1360, height=900, min_size=(1024, 680))
         webview.start()
-    except Exception:
-        # No native webview available (e.g. dev box without pywebview): fall
-        # back to the default browser and keep the server alive.
+    except Exception as e:
+        # No native webview available: fall back to the default browser and
+        # keep the server alive.
+        print(f"native window unavailable ({e}); opening browser", file=sys.stderr)
         import webbrowser
 
         webbrowser.open(url)
@@ -109,6 +109,33 @@ def main_entry() -> None:
                 time.sleep(1)
         except KeyboardInterrupt:
             pass
+
+
+def main_entry() -> None:
+    # A windowed build has no console, so a startup crash would vanish silently.
+    # Capture it to a log next to the user's data and surface it in a dialog so
+    # it can actually be reported.
+    try:
+        _launch()
+    except Exception:
+        import traceback
+
+        tb = traceback.format_exc()
+        print(tb, file=sys.stderr)
+        try:
+            (DATA_DIR / "startup-error.log").write_text(tb, encoding="utf-8")
+        except Exception:
+            pass
+        if sys.platform.startswith("win"):
+            try:
+                import ctypes
+
+                ctypes.windll.user32.MessageBoxW(
+                    0, tb[-1600:], "Automix failed to start", 0x10
+                )
+            except Exception:
+                pass
+        raise
 
 
 if __name__ == "__main__":

@@ -32,7 +32,10 @@ if bin_dir.is_dir():
 # librosa/numba/soundfile/scipy pull in data files and lazy submodules that
 # PyInstaller misses without help.
 hiddenimports = []
-for pkg in ("librosa", "numba", "soundfile", "scipy", "sklearn", "audioread"):
+for pkg in (
+    "librosa", "numba", "llvmlite", "soundfile", "soxr", "audioread",
+    "lazy_loader", "pooch", "scipy", "sklearn", "joblib", "threadpoolctl",
+):
     try:
         d, b, h = collect_all(pkg)
         datas += d
@@ -67,7 +70,9 @@ exe = EXE(
     [],
     exclude_binaries=True,
     name="Automix",
-    console=False,
+    # Temporarily console=True so a startup crash prints a traceback instead of
+    # dying silently. Flip back to False once the app launches cleanly.
+    console=True,
     disable_windowed_traceback=False,
     icon=str(ROOT / "packaging" / "icon.ico") if (ROOT / "packaging" / "icon.ico").exists() else None,
 )

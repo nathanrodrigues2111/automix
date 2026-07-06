@@ -22,10 +22,11 @@ message). This has bitten repeatedly. Before editing anything in
 
 ## Layout
 
-- `videos/imports/` downloaded source tracks; `videos/exports/` rendered `automix_*.mp4`. Whole `videos/` is gitignored.
+- `videos/imports/` downloaded source tracks; `videos/exports/` rendered mixes, each in its OWN per-title folder (`exports/<title>/automix_*.mp4` + `_short.mp4` + `.verify.json` together). Whole `videos/` is gitignored. `/api/mixes` recurses, lists one entry per full mix (Short folded in as `short_path`), and delete removes the whole folder; pre-folder loose files still work. In a PACKAGED build the entire `videos/` + caches + DB live under `~/Automix` instead (see paths.py below).
 - `backend/.cache/`: `wavs/` (analysis WAVs keyed by file hash), `stems/`, `waveforms/`, `previews/` (live-preview clip WAVs, suffix `_n14` = loudnorm -14), `renders/` (temp workdirs).
 - `assets/`: `fonts/` (selectable title fonts — built-ins `BebasNeue-Regular.ttf` (family "Bebas Neue", the default) + `Cubano.ttf`, plus gitignored user uploads via Settings → Output → Title font / `POST /api/fonts`; render picks via config `title_font` = file stem), `edmpapa11.png` (FULL-FRAME 1920x1080 brand overlay: opaque bars + wordmark, transparent middle, composited 1:1), `black-bars.png` (bars only, shown during the intro), `into.avi` (intro animation, 3.0s, 4096x2304 BGRA raw, **2.7GB, gitignored** — web transcode lives at `frontend/public/intro.mp4`).
 - **CRITICAL**: `analysis.file_hash()` is PATH-based (path+size). Moving a video file orphans its analysis/titles. `db.rekey_file_hash()` + the startup migration in `main.py` handle known moves — re-key rather than re-analyze.
+- **Packaged-build paths** (`backend/paths.py`): `VIDEOS_DIR`, `CACHE_DIR`, `DB_PATH`, `ASSETS_DIR` are env-overridable (`AUTOMIX_DATA`, `AUTOMIX_ASSETS`). Unset = the old dev defaults, byte-identical. The desktop launcher sets `AUTOMIX_DATA=~/Automix` so library/caches/DB persist outside the read-only bundle. **GOTCHA**: build media/URL paths as `"videos/" + p.relative_to(VIDEOS_DIR).as_posix()`, NEVER `relative_to(PROJECT_ROOT)` — in a packaged build the data dir is NOT under the install dir (this crashed `/api/tracks`, surfacing as "cannot connect to backend"). `.as_posix()` gives URL slashes on Windows. `/api/reveal` resolves against `VIDEOS_DIR.parent`.
 
 ## Audio pipeline (the hard-won parts)
 
@@ -62,6 +63,14 @@ message). This has bitten repeatedly. Before editing anything in
 - The BUILT frontend only is public: `scripts/deploy-pages.sh` builds with `--base=/automix-app/` and force-pushes dist to the public `nathanrodrigues2111/automix-app` repo → GitHub Pages at https://nathanrodrigues2111.github.io/automix-app/ (free plan requires the public repo; that's why the split exists).
 - The hosted page talks to the user's local backend (browsers exempt localhost from mixed-content). Backend CORS allows `*.github.io` / `*.pages.dev`.
 - Public assets referenced in code must use `import.meta.env.BASE_URL` (Pages serves under a subpath).
+
+## Desktop packaging (self-contained app per OS)
+
+- `app.py` (repo root) is the PyInstaller entry: sets `AUTOMIX_DATA=~/Automix` + `AUTOMIX_ASSETS`, prepends bundled `bin/` (ffmpeg/ffprobe/yt-dlp) to PATH, adds `backend/` to sys.path, imports `main.app`, mounts the built frontend (`dist`) at `/` (same-origin, so zero frontend config), runs uvicorn on a free port, opens a pywebview window (browser fallback when no webview — Linux uses this). Any startup crash is written to `~/Automix/startup-error.log` + a Windows message box (a windowed build otherwise dies silently).
+- `packaging/automix.spec` freezes it; `packaging/fetch_tools.py` downloads static ffmpeg/ffprobe/yt-dlp into `bin/` (CI-only, gitignored); `packaging/automix.iss` (Inno Setup) wraps the Windows onedir into an installer `.exe`. The ML stack (`torch`/`demucs`/`allin1`) is excluded to stay lean. PyInstaller misses librosa/numba deps, so the spec `collect_all`s librosa, numba, llvmlite, soundfile, soxr, audioread, lazy_loader, pooch, scipy, sklearn, joblib, threadpoolctl.
+- `.github/workflows/release.yml`: on **release published** (or manual dispatch) builds a matrix — Windows x64, macOS arm64 + x64, Linux x64 + arm64 — on GitHub-hosted runners (NOT locally; cross-OS can't build here) and `gh release upload`s each package to that release. macOS Intel (`macos-13`) runners often queue a long time.
+- To ship: publish a `vX.Y.Z` GitHub Release. The release event checks out the TAG, so the tag must point at the fixed code; iterating the same version = delete + recreate the release/tag (`gh release delete v0.11.0 --cleanup-tag` then `gh release create`).
+- Packages are UNSIGNED: Windows Smart App Control blocks them outright (no "run anyway"), macOS Gatekeeper needs right-click Open. Real fix = code signing (Azure Trusted Signing for Windows, ~$10/mo, wires into the workflow). `automix.spec` currently has `console=True` for debugging silent Windows crashes — flip to `False` for clean release builds once launch is confirmed.
 
 ## Working conventions (user preferences)
 

@@ -18,6 +18,20 @@ Automix downloads every track in a playlist, finds each song's drop, trims it, a
 
 ---
 
+## Download
+
+Prebuilt, self-contained desktop packages (Python, ffmpeg, yt-dlp, and the UI all bundled — nothing else to install) are published on the [**latest release**](https://github.com/nathanrodrigues2111/automix/releases/latest):
+
+| Platform | File |
+| --- | --- |
+| 🪟 Windows x64 | `Automix-windows-x64-setup.exe` (installer) |
+| 🍎 macOS (Apple Silicon) | `Automix-macos-arm64.dmg` |
+| 🍎 macOS (Intel) | `Automix-macos-x64.dmg` |
+| 🐧 Linux x64 | `Automix-linux-x64.tar.gz` |
+| 🐧 Linux arm64 | `Automix-linux-arm64.tar.gz` |
+
+Run it and Automix opens in its own window; your library and renders live in `~/Automix`. The builds are **unsigned**, so the first launch shows an "unknown developer" prompt (right-click Open on macOS; on Windows 11, Smart App Control must be off or the build signed). Prefer to run from source? See [Quick start](#quick-start).
+
 ## What it does
 
 Paste a YouTube playlist (or a single video, or an hour-long DJ set) and Automix runs the whole pipeline live in your browser:

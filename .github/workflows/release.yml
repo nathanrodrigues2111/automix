@@ -41,15 +41,6 @@ jobs:
         with:
           python-version: "3.11"
 
-      # pywebview needs a system webview on Linux; without it the app falls
-      # back to the default browser, but the CI build still wants the libs.
-      - name: Linux webview deps
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libgirepository1.0-dev gir1.2-webkit2-4.1 \
-            gir1.2-gtk-3.0 python3-gi python3-gi-cairo || true
-
       - name: Build frontend
         run: |
           cd frontend
@@ -61,7 +52,9 @@ jobs:
           python -m pip install --upgrade pip
           pip install ./backend
           pip install pyinstaller pywebview
-          pip install pygobject || true
+          # macOS/Windows get a native window via pywebview's bundled backend
+          # (pyobjc / pythonnet, installed automatically). Linux uses the
+          # browser fallback in app.py, so no GTK/Qt build is needed here.
 
       - name: Fetch ffmpeg / ffprobe / yt-dlp
         run: python packaging/fetch_tools.py

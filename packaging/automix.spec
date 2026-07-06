@@ -48,7 +48,7 @@ hiddenimports += [
 hiddenimports += collect_submodules("uvicorn")
 
 a = Analysis(
-    ["app.py"],
+    [str(ROOT / "app.py")],
     pathex=[str(ROOT), str(ROOT / "backend")],
     binaries=binaries,
     datas=datas,

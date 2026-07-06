@@ -77,12 +77,16 @@ jobs:
             -ov -format UDZO "Automix-${{ matrix.label }}.dmg"
           echo "ASSET=Automix-${{ matrix.label }}.dmg" >> "$GITHUB_ENV"
 
-      - name: Package (Windows)
+      - name: Package (Windows installer .exe)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          Compress-Archive -Path dist/Automix/* -DestinationPath "Automix-${{ matrix.label }}.zip" -Force
-          "ASSET=Automix-${{ matrix.label }}.zip" | Out-File -FilePath $env:GITHUB_ENV -Append
+          choco install innosetup --no-progress -y
+          $ver = "${{ github.ref_name }}"
+          if (-not $ver) { $ver = "0.0.0" }
+          $ver = $ver.TrimStart("v")
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "/DAppVer=$ver" packaging\automix.iss
+          "ASSET=Automix-windows-x64-setup.exe" | Out-File -FilePath $env:GITHUB_ENV -Append
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4

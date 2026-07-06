@@ -118,6 +118,29 @@ automix/
 - **Rendered output** — `videos/automix_<name>_<timestamp>.mp4` (1080p/4K H.264 CRF 17, AAC 320k) plus a vertical Short.
 - **Branding** — replace `assets/edmpapa11.png` and drop a TTF/OTF into the title-font picker to re-skin; toggle overlay, titles, intro, outro, and Shorts per render in Settings. See `API_CONTRACT.md` for exact request shapes.
 
+## Desktop app (one-file package)
+
+Automix can also ship as a single self-contained download per OS: the Python
+backend, the built UI, and static `ffmpeg`/`yt-dlp` are all bundled, so users
+run one file with nothing else installed. The launcher (`app.py`) boots the
+backend and opens the UI in a native window, writing the library and renders to
+`~/Automix`.
+
+`.github/workflows/release.yml` builds the packages on a per-OS matrix
+(Windows x64, macOS arm64 + x64, Linux x64 + arm64) and attaches them to a
+`v*` release. Trigger it manually from the Actions tab (Run workflow) to test a
+build without cutting a tag. Local build:
+
+```bash
+cd frontend && npm ci && npm run build && cd ..
+pip install ./backend pyinstaller pywebview
+python packaging/fetch_tools.py       # downloads ffmpeg/ffprobe/yt-dlp into bin/
+pyinstaller --noconfirm packaging/automix.spec
+```
+
+Output lands in `dist/` (`Automix.app` on macOS, an `Automix/` folder elsewhere).
+The heavy neural `[ml]` stack is intentionally excluded to keep the package lean.
+
 ## Deploy
 
 The hosted UI at <https://nathanrodrigues2111.github.io/automix-app/> is the built frontend only — it talks to *your* local backend (browsers exempt localhost from mixed-content rules). `scripts/deploy-pages.sh` builds and publishes the public app repo. The source stays private.

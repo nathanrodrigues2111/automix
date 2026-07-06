@@ -9,6 +9,17 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "0.11.0",
+    date: "2026-07-06",
+    title: "Every export gets its own tidy folder",
+    items: [
+      "Each render now lands in its own folder named after the export, holding the full video, the vertical Short, and the verification report together, instead of loose files piled in the exports folder",
+      "The Mixes panel shows one entry per mix now (the Short is tucked in with it, not listed as a separate item)",
+      "Deleting a mix removes its whole folder in one go, Short and report included",
+      "Existing mixes from before this change still show up and play as normal",
+    ],
+  },
+  {
     version: "0.10.0",
     date: "2026-07-05",
     title: "Live drop length and an accent-matched timeline",

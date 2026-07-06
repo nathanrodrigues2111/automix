@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import shutil
 import subprocess
 import uuid
 from datetime import datetime, timezone
@@ -25,6 +26,7 @@ from fastapi.staticfiles import StaticFiles
 import analysis as analysis_mod
 import db
 import models_setup
+import paths
 import render as render_mod
 import schemas
 import youtube as youtube_mod
@@ -45,10 +47,10 @@ app.add_middleware(
 
 BACKEND_DIR = Path(__file__).parent
 PROJECT_ROOT = BACKEND_DIR.parent
-VIDEOS_DIR = PROJECT_ROOT / "videos"
+VIDEOS_DIR = paths.VIDEOS_DIR
 IMPORTS_DIR = VIDEOS_DIR / "imports"  # downloaded source tracks
 EXPORTS_DIR = VIDEOS_DIR / "exports"  # rendered automix outputs
-WAVEFORM_CACHE_DIR = BACKEND_DIR / ".cache" / "waveforms"
+WAVEFORM_CACHE_DIR = paths.CACHE_DIR / "waveforms"
 
 IMPORTS_DIR.mkdir(parents=True, exist_ok=True)
 EXPORTS_DIR.mkdir(parents=True, exist_ok=True)
@@ -65,7 +67,7 @@ def _rekey_moved_files() -> None:
     rename cached artifacts so nothing has to be re-analyzed. Idempotent."""
     import hashlib
 
-    previews_dir = BACKEND_DIR / ".cache" / "previews"
+    previews_dir = paths.CACHE_DIR / "previews"
     for p in IMPORTS_DIR.glob("*.mp4"):
         try:
             size = p.stat().st_size
@@ -1016,12 +1018,26 @@ async def list_mixes() -> list[dict]:
 
     def _run() -> list[dict]:
         out = []
-        for p in sorted(EXPORTS_DIR.glob("automix_*.mp4"), key=lambda x: x.stat().st_mtime, reverse=True):
+        # Renders now live in per-title folders (exports/<title>/automix_*.mp4);
+        # rglob also picks up any legacy loose files. One entry per full mix —
+        # the Short is folded in as short_path, not listed separately.
+        seen = sorted(
+            (p for p in EXPORTS_DIR.rglob("automix_*.mp4") if not p.name.endswith("_short.mp4")),
+            key=lambda x: x.stat().st_mtime,
+            reverse=True,
+        )
+        for p in seen:
             st = p.stat()
+            short = p.with_name(f"{p.stem}_short.mp4")
             out.append(
                 {
                     "filename": p.name,
-                    "path": f"videos/exports/{p.name}",
+                    "path": f"videos/{p.relative_to(VIDEOS_DIR).as_posix()}",
+                    "short_path": (
+                        f"videos/{short.relative_to(VIDEOS_DIR).as_posix()}"
+                        if short.exists()
+                        else None
+                    ),
                     "size_bytes": st.st_size,
                     "created_at": datetime.fromtimestamp(st.st_mtime, tz=timezone.utc).isoformat(),
                 }
@@ -1037,8 +1053,10 @@ def _safe_video_file(filename: str, prefix: str | None = None) -> Path:
         raise HTTPException(status_code=400, detail="invalid filename")
     if prefix and not name.startswith(prefix):
         raise HTTPException(status_code=400, detail="not a rendered mix")
-    p = EXPORTS_DIR / name
-    if not p.exists():
+    # Renders live in per-title subfolders, so search recursively by basename
+    # (timestamped, so unique). Falls back to the flat exports/ for legacy files.
+    p = next((q for q in EXPORTS_DIR.rglob(name) if q.is_file()), None)
+    if p is None:
         raise HTTPException(status_code=404, detail="file not found")
     return p
 
@@ -1046,7 +1064,17 @@ def _safe_video_file(filename: str, prefix: str | None = None) -> Path:
 @app.delete("/api/mixes/{filename}")
 async def delete_mix(filename: str) -> dict:
     p = _safe_video_file(filename, prefix="automix_")
-    await asyncio.to_thread(p.unlink)
+
+    def _remove() -> None:
+        # New layout: the mix has its own folder (full + Short + report) — drop
+        # the whole folder. Legacy layout: loose files — remove the trio.
+        if p.parent != EXPORTS_DIR:
+            shutil.rmtree(p.parent, ignore_errors=True)
+        else:
+            for f in (p, p.with_name(f"{p.stem}_short.mp4"), p.with_suffix(".verify.json")):
+                f.unlink(missing_ok=True)
+
+    await asyncio.to_thread(_remove)
     return {"deleted": filename}
 
 
@@ -1060,7 +1088,7 @@ async def delete_track(track_id: str) -> dict:
     return {"deleted": path.name}
 
 
-PREVIEW_CACHE_DIR = Path(__file__).parent / ".cache" / "previews"
+PREVIEW_CACHE_DIR = paths.CACHE_DIR / "previews"
 
 
 @app.get("/api/tracks/{track_id}/clip")

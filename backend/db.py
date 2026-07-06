@@ -4,11 +4,12 @@ import json
 import sqlite3
 import threading
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any
 
+import paths
+
 _DB_LOCK = threading.Lock()
-_DB_PATH = Path(__file__).parent / ".cache" / "automix.sqlite"
+_DB_PATH = paths.DB_PATH
 
 
 def _ensure_dirs() -> None:

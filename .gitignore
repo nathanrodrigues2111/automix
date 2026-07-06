@@ -44,6 +44,12 @@ assets/*.avi
 # Playwright MCP session artifacts
 .playwright-mcp/
 
+# Desktop packaging: fetched static tools + PyInstaller outputs (dist/ build/ above)
+/bin/
+*.dmg
+Automix-*.tar.gz
+Automix-*.zip
+
 # OS
 .DS_Store
 Thumbs.db

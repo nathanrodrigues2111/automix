@@ -1,0 +1,104 @@
+name: Build desktop packages
+
+# Builds a self-contained Automix package for each OS/arch and, when triggered
+# by a version tag (v*), attaches them to that GitHub Release. Trigger manually
+# from the Actions tab (Run workflow) to test a build without cutting a tag.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: ${{ matrix.label }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            label: linux-x64
+          - os: ubuntu-24.04-arm
+            label: linux-arm64
+          - os: macos-14
+            label: macos-arm64
+          - os: macos-13
+            label: macos-x64
+          - os: windows-latest
+            label: windows-x64
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # pywebview needs a system webview on Linux; without it the app falls
+      # back to the default browser, but the CI build still wants the libs.
+      - name: Linux webview deps
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgirepository1.0-dev gir1.2-webkit2-4.1 \
+            gir1.2-gtk-3.0 python3-gi python3-gi-cairo || true
+
+      - name: Build frontend
+        run: |
+          cd frontend
+          npm ci
+          npm run build
+
+      - name: Install Python deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install ./backend
+          pip install pyinstaller pywebview
+          pip install pygobject || true
+
+      - name: Fetch ffmpeg / ffprobe / yt-dlp
+        run: python packaging/fetch_tools.py
+
+      - name: Freeze with PyInstaller
+        run: pyinstaller --noconfirm packaging/automix.spec
+
+      - name: Package (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          cd dist
+          tar -czf "../Automix-${{ matrix.label }}.tar.gz" Automix
+          cd ..
+          echo "ASSET=Automix-${{ matrix.label }}.tar.gz" >> "$GITHUB_ENV"
+
+      - name: Package (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          hdiutil create -volname Automix -srcfolder "dist/Automix.app" \
+            -ov -format UDZO "Automix-${{ matrix.label }}.dmg"
+          echo "ASSET=Automix-${{ matrix.label }}.dmg" >> "$GITHUB_ENV"
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Compress-Archive -Path dist/Automix/* -DestinationPath "Automix-${{ matrix.label }}.zip" -Force
+          "ASSET=Automix-${{ matrix.label }}.zip" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.label }}
+          path: ${{ env.ASSET }}
+
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${GITHUB_REF_NAME}" "${ASSET}" --clobber

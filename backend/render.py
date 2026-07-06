@@ -21,14 +21,15 @@ import numpy as np
 
 import analysis as analysis_mod
 import db
+import paths
 import youtube as youtube_mod
 
 BACKEND_DIR = Path(__file__).parent
 PROJECT_ROOT = BACKEND_DIR.parent
-VIDEOS_DIR = PROJECT_ROOT / "videos"
+VIDEOS_DIR = paths.VIDEOS_DIR
 EXPORTS_DIR = VIDEOS_DIR / "exports"
-RENDER_TMP_DIR = BACKEND_DIR / ".cache" / "renders"
-ASSETS_DIR = PROJECT_ROOT / "assets"
+RENDER_TMP_DIR = paths.CACHE_DIR / "renders"
+ASSETS_DIR = paths.ASSETS_DIR
 LOGO_PATH = ASSETS_DIR / "edmpapa11.png"
 BARS_PATH = ASSETS_DIR / "black-bars.png"
 FONTS_DIR = ASSETS_DIR / "fonts"
@@ -871,11 +872,14 @@ def _display_title(src: Path) -> str:
 
 
 def _export_path(clips: list[dict], srcs: list[Path], config: dict) -> Path:
-    """Final export path. Default style names the file after the first
-    source video's file name plus the local date and time so repeated
-    renders never overlap (automix_<Video_Name>_20260705_1731.mp4); the
-    "timestamp" style keeps the old automix_<UTC timestamp>.mp4. The
-    automix_ prefix is REQUIRED — main.py tells exports from imports by it.
+    """Final export path. Each render gets its own folder under exports/,
+    named after the export title, holding the full mix, its Short, and the
+    verification report together instead of loose files. Default style names
+    the folder after the first source video plus the local date and time so
+    repeated renders never overlap (exports/<Video_Name>_20260705_1731/
+    automix_<Video_Name>_20260705_1731.mp4); the "timestamp" style uses the
+    UTC timestamp. The automix_ file prefix is REQUIRED — main.py tells
+    exports from imports by it.
     """
     style = str(config.get("filename_style", "file"))
     if style != "timestamp" and srcs:
@@ -883,14 +887,12 @@ def _export_path(clips: list[dict], srcs: list[Path], config: dict) -> Path:
         slug = re.sub(r"[^A-Za-z0-9]+", "_", stem).strip("_")[:48]
         if slug:
             local_ts = datetime.now().strftime("%Y%m%d_%H%M")
-            cand = EXPORTS_DIR / f"automix_{slug}_{local_ts}.mp4"
-            while cand.exists():
-                cand = EXPORTS_DIR / (
-                    f"automix_{slug}_{local_ts}_{random.randint(10, 99)}.mp4"
-                )
-            return cand
+            folder = EXPORTS_DIR / f"{slug}_{local_ts}"
+            while folder.exists():
+                folder = EXPORTS_DIR / f"{slug}_{local_ts}_{random.randint(10, 99)}"
+            return folder / f"automix_{slug}_{local_ts}.mp4"
     ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    return EXPORTS_DIR / f"automix_{ts}.mp4"
+    return EXPORTS_DIR / f"automix_{ts}" / f"automix_{ts}.mp4"
 
 
 # ---------- YouTube Shorts (vertical 1080x1920 with the edmpapa template) ----

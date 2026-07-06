@@ -11,9 +11,11 @@ from typing import Any, Callable
 
 import numpy as np
 
+import paths
+
 BACKEND_DIR = Path(__file__).parent
-STEMS_CACHE_DIR = BACKEND_DIR / ".cache" / "stems"
-WAV_CACHE_DIR = BACKEND_DIR / ".cache" / "wavs"
+STEMS_CACHE_DIR = paths.CACHE_DIR / "stems"
+WAV_CACHE_DIR = paths.CACHE_DIR / "wavs"
 
 ProgressCb = Callable[[str, float, str], None] | None
 

@@ -124,8 +124,10 @@ export interface FontsResponse {
 
 export interface MixRecord {
   filename: string
-  /** Relative path like "videos/automix_...mp4" — link as `/${path}`. */
+  /** Relative path like "videos/exports/<title>/automix_...mp4" — link as `/${path}`. */
   path: string
+  /** Companion vertical Short, if one was rendered (same folder). */
+  short_path?: string | null
   size_bytes: number
   created_at: string
 }

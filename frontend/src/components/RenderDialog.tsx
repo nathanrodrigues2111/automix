@@ -125,45 +125,49 @@ export function RenderDialog({
         </DialogHeader>
 
         {!jobId && !isPreview && (
-          <div className="space-y-3">
-            <div className="flex items-center justify-between gap-3">
-              <span className="text-sm text-muted-foreground">Resolution</span>
-              <Select value={resolution} onValueChange={setResolution}>
-                <SelectTrigger className="h-8 w-40 text-xs">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="480p">480p</SelectItem>
-                  <SelectItem value="720p">720p (HD)</SelectItem>
-                  <SelectItem value="1080p">1080p (Full HD)</SelectItem>
-                  <SelectItem value="1440p">1440p (2K)</SelectItem>
-                  <SelectItem value="2160p">2160p (4K)</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            <label className="flex cursor-pointer items-center justify-between gap-3">
-              <span className="text-sm text-muted-foreground">
-                Only render the Short
-              </span>
-              <input
-                type="checkbox"
-                className="h-4 w-4 shrink-0 accent-[var(--primary)]"
-                checked={shortOnly}
-                onChange={(e) => setShortOnly(e.target.checked)}
-              />
-            </label>
-            <div className="space-y-1.5">
-              <span className="text-sm text-muted-foreground">Short title</span>
-              <Input
-                value={shortTitle}
-                onChange={(e) => setShortTitle(e.target.value)}
-                placeholder="Optional caption for the Short"
-                aria-label="Short title caption"
-                className="h-8 text-sm"
-              />
+          <div className="flex flex-col gap-5 sm:flex-row">
+            <div className="min-w-0 flex-1 space-y-3">
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-sm text-muted-foreground">Resolution</span>
+                <Select value={resolution} onValueChange={setResolution}>
+                  <SelectTrigger className="h-8 w-40 text-xs">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="480p">480p</SelectItem>
+                    <SelectItem value="720p">720p (HD)</SelectItem>
+                    <SelectItem value="1080p">1080p (Full HD)</SelectItem>
+                    <SelectItem value="1440p">1440p (2K)</SelectItem>
+                    <SelectItem value="2160p">2160p (4K)</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <label className="flex cursor-pointer items-center justify-between gap-3">
+                <span className="text-sm text-muted-foreground">
+                  Only render the Short
+                </span>
+                <input
+                  type="checkbox"
+                  className="h-4 w-4 shrink-0 accent-[var(--primary)]"
+                  checked={shortOnly}
+                  onChange={(e) => setShortOnly(e.target.checked)}
+                />
+              </label>
+              <div className="space-y-1.5">
+                <span className="text-sm text-muted-foreground">Short title</span>
+                <Input
+                  value={shortTitle}
+                  onChange={(e) => setShortTitle(e.target.value)}
+                  placeholder="Optional caption for the Short"
+                  aria-label="Short title caption"
+                  className="h-8 text-sm"
+                />
+              </div>
             </div>
             {config.make_short !== false && (
-              <ShortPreview config={{ ...config, short_title: shortTitle }} />
+              <div className="shrink-0 sm:w-[210px]">
+                <ShortPreview config={{ ...config, short_title: shortTitle }} />
+              </div>
             )}
           </div>
         )}

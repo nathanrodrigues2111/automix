@@ -1,87 +1,83 @@
-import { useEffect } from "react"
-import { useFonts } from "@/api/client"
-import { ensureFontLoaded } from "@/lib/fonts"
-import type { CSSProperties } from "react"
-import type { FontInfo, RenderConfig } from "@/api/types"
+import { useEffect, useRef, useState } from "react"
+import { Loader2 } from "lucide-react"
+import { apiUrl } from "@/lib/backend"
+import type { RenderConfig } from "@/api/types"
 
 /**
- * A lightweight, self-contained mockup of the rendered vertical Short's
- * caption layout. NOT a real render — a 9:16 placeholder approximating how
- * the title (top) and track (bottom) captions will look, updating live as the
- * Short title / font / artist toggle change. Uses `box-decoration-break:clone`
- * so each wrapped line gets its own rounded box (the TikTok/CapCut look), and
- * container-query units (cqw) so it scales with the frame.
+ * Live Short caption preview. Instead of approximating in CSS, it asks the
+ * backend to render the caption frame with the SAME code the renderer uses
+ * (rounded per-line boxes, chosen font, color Noto emoji) so the preview
+ * matches the output exactly. Debounced so typing the title stays smooth.
  */
 export function ShortPreview({ config }: { config: Omit<RenderConfig, "clips"> }) {
-  const fonts = useFonts()
-  const list = fonts.data?.fonts ?? []
+  const [url, setUrl] = useState<string | null>(null)
+  const [loading, setLoading] = useState(false)
+  const objUrl = useRef<string | null>(null)
 
-  const find = (id?: string | null): FontInfo | undefined =>
-    id ? list.find((f) => f.id === id) : undefined
-  const resolved = find(config.short_font) ?? find(config.title_font) ?? find(fonts.data?.default)
-  const family = resolved?.family ?? "sans-serif"
-
-  useEffect(() => {
-    if (resolved) void ensureFontLoaded(resolved).catch(() => {})
-  }, [resolved])
-
-  const title = (config.short_title ?? "").trim()
+  const title = config.short_title ?? ""
+  const shortFont = config.short_font ?? null
+  const titleFont = config.title_font ?? null
   const showArtist = config.short_show_artist ?? false
 
-  // Per-line rounded box: `box-decoration-break: clone` clones the background,
-  // padding and radius onto every wrapped line, hugging each line's width.
-  const chip = (fontSize: string, opacity = 1): CSSProperties => ({
-    fontFamily: `'${family}', sans-serif`,
-    fontWeight: 800,
-    color: "#000",
-    background: "#fff",
-    padding: "0.1em 0.42em",
-    borderRadius: "0.4em",
-    boxDecorationBreak: "clone",
-    WebkitBoxDecorationBreak: "clone",
-    fontSize,
-    opacity,
-  })
+  useEffect(() => {
+    let cancelled = false
+    setLoading(true)
+    const t = window.setTimeout(async () => {
+      try {
+        const res = await fetch(apiUrl("/api/short-preview"), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            short_title: title,
+            short_font: shortFont,
+            title_font: titleFont,
+            short_show_artist: showArtist,
+          }),
+        })
+        if (!res.ok) throw new Error(String(res.status))
+        const blob = await res.blob()
+        if (cancelled) return
+        const next = URL.createObjectURL(blob)
+        if (objUrl.current) URL.revokeObjectURL(objUrl.current)
+        objUrl.current = next
+        setUrl(next)
+      } catch {
+        // Keep the last good preview (e.g. if the backend is momentarily down).
+      } finally {
+        if (!cancelled) setLoading(false)
+      }
+    }, 350)
+    return () => {
+      cancelled = true
+      window.clearTimeout(t)
+    }
+  }, [title, shortFont, titleFont, showArtist])
+
+  useEffect(
+    () => () => {
+      if (objUrl.current) URL.revokeObjectURL(objUrl.current)
+    },
+    [],
+  )
 
   return (
     <div className="space-y-2">
       <div className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
         Preview
       </div>
-      <div
-        className="relative mx-auto aspect-[9/16] w-full max-w-[248px] overflow-hidden rounded-2xl border border-border/60"
-        style={{
-          containerType: "inline-size",
-          background:
-            "radial-gradient(120% 80% at 50% 20%, #241014 0%, #14141c 45%, #050507 100%)",
-        }}
-        aria-label="Short caption preview"
-      >
-        {/* Title — upper area */}
-        <div
-          className="absolute inset-x-0 top-[9%] px-[7%] text-center"
-          style={{ lineHeight: 1.5 }}
-        >
-          <span style={chip("9cqw", title ? 1 : 0.45)}>
-            {title || "Your Short title"}
-          </span>
-        </div>
-
-        {/* Track name (+ optional artist) — lower area (sample text) */}
-        <div
-          className="absolute inset-x-0 bottom-[13%] px-[7%] text-center"
-          style={{ lineHeight: 1.5 }}
-        >
-          <span className="uppercase" style={chip("9.5cqw")}>
-            {showArtist && (
-              <>
-                <span style={{ fontSize: "0.62em" }}>Artist Name</span>
-                <br />
-              </>
-            )}
-            Track Name
-          </span>
-        </div>
+      <div className="relative mx-auto aspect-[9/16] w-full max-w-[248px] overflow-hidden rounded-2xl border border-border/60 bg-black">
+        {url && (
+          <img
+            src={url}
+            alt="Short caption preview"
+            className="h-full w-full object-cover"
+          />
+        )}
+        {loading && (
+          <div className="absolute right-2 top-2 text-muted-foreground/70">
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          </div>
+        )}
       </div>
     </div>
   )

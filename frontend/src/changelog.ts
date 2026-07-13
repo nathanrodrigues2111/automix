@@ -25,7 +25,7 @@ export const CHANGELOG: ChangelogEntry[] = [
       "Add a custom Short title: a bold boxed caption (TikTok/CapCut style) burned near the top of the Short, set in Settings > Output",
       "Short captions use connected per-line rounded boxes that hug each line (curving inward on shorter lines) with full-color emoji, like TikTok/CapCut captions",
       "Shorts show just the track name by default (artist + track ran too long); turn on Show artist name in Settings to include the artist",
-      "New live Short preview in the Render dialog showing how the title and track captions will look before you render",
+      "The live Short preview in the Render dialog now renders with the exact same engine as the output (same font, color emoji, and smoothly rounded caption boxes), so it matches the final Short",
       "The EDMPAPA intro on the full video is now more subtle (lower opacity) so it does not wash out the footage",
       "The Short video now zooms to fill the whole vertical frame (aspect kept, edges cropped) instead of leaving black bars",
       "New Short end card toggle (the 'watch the full video' card) in Settings, off by default",

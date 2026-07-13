@@ -1522,9 +1522,7 @@ def _overlay_intro(
             f"tpad=start_duration={start:.3f}:start_mode=add:color=black:"
             f"stop=-1:stop_mode=add:color=black[ov];"
             f"[0:v]format=gbrp[base];"
-            # all_opacity dims the intro so it reads as a subtle overlay rather
-            # than washing out the video underneath.
-            f"[base][ov]blend=all_mode=screen:all_opacity=0.6:shortest=1,format=yuv420p[v]"
+            f"[base][ov]blend=all_mode=screen:shortest=1,format=yuv420p[v]"
         )
         cmd = [
             "ffmpeg", "-y", "-i", str(video), "-i", str(intro),

@@ -619,6 +619,66 @@ def get_font_file(font_id: str) -> FileResponse:
     raise HTTPException(status_code=404, detail="font not found")
 
 
+@app.post("/api/short-preview")
+async def short_preview(req: dict) -> Response:
+    """Render a Short caption preview frame with the SAME code the renderer
+    uses (rounded per-line boxes, chosen font, color Noto emoji) so the UI
+    preview matches the output exactly. Returns a small PNG."""
+
+    def _run() -> bytes:
+        import io
+        import tempfile
+
+        from PIL import Image
+
+        import short_captions as sc
+
+        W, H = 1080, 1920
+        title = str(req.get("short_title") or "").strip()
+        show_artist = bool(req.get("short_show_artist"))
+        font = render_mod.resolve_title_font(req.get("short_font") or req.get("title_font"))
+        font_path = font[0] if font else (render_mod.FONTS_DIR / "Cubano.ttf")
+        emoji: Path | None = render_mod.ASSETS_DIR / "NotoColorEmoji.ttf"
+        if not emoji.exists():
+            emoji = None
+
+        frame = Image.new("RGBA", (W, H), (20, 18, 26, 255))
+        tmp = Path(tempfile.mkdtemp(prefix="shortpv_"))
+        try:
+            def place(lines: list[tuple[str, int]], cy: int) -> None:
+                lines = [(t, fs) for t, fs in lines if t.strip()]
+                if not lines:
+                    return
+                p = tmp / "c.png"
+                w, h = sc.render_block(lines, font_path, p, emoji_font=emoji, max_width=W - 40)
+                im = Image.open(p).convert("RGBA")
+                frame.alpha_composite(im, ((W - w) // 2, int(cy - h / 2)))
+
+            if title:
+                n = len(title)
+                h_fs = 96 if n <= 20 else 84 if n <= 36 else 70 if n <= 60 else 60
+                place([(ln, h_fs) for ln in sc.wrap_text(title, h_fs, font_path, 840)], 360)
+            else:
+                place([("Your Short title", 76)], 360)
+
+            t_fs = sc.fit_font_size("TRACK NAME", font_path, 840, base=90)
+            block: list[tuple[str, int]] = []
+            if show_artist:
+                block.append(("ARTIST NAME", min(t_fs, 74)))
+            block.append(("TRACK NAME", t_fs))
+            place(block, 1360)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+        out = frame.convert("RGB").resize((432, 768), Image.LANCZOS)
+        buf = io.BytesIO()
+        out.save(buf, "PNG")
+        return buf.getvalue()
+
+    png = await asyncio.to_thread(_run)
+    return Response(content=png, media_type="image/png")
+
+
 def _analyze_imported(
     results: list[dict],
     progress: "ProgressCb",

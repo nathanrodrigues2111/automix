@@ -12,7 +12,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 # Noto Color Emoji ships one 109px bitmap strike; render at that ppem then
 # scale down to the caption size.
@@ -101,36 +101,43 @@ def render_block(
     if not prepared:
         prepared = [(48, ImageFont.truetype(str(font_path), 48), [], 0, 48)]
 
-    # Each line gets its OWN rounded box hugging its width; consecutive boxes
-    # overlap vertically so they merge into one connected shape that curves
-    # inward where a line is shorter (the TikTok/CapCut caption look).
+    # Each line gets its OWN box hugging its width; consecutive boxes overlap
+    # so they form one connected shape that steps in on shorter lines. To
+    # smooth EVERY corner uniformly — the convex outer corners AND the concave
+    # fillets where the width steps in — the union of sharp rectangles is built
+    # as a mask, then blurred + thresholded (a blur past a 50% cut rounds any
+    # corner by ~the blur radius). This is the TikTok/CapCut caption look.
     radius = int(max_fs * 0.42)
-    padx = radius + int(max_fs * 0.14)  # clears the corner + a little breathing room
+    padx = radius + int(max_fs * 0.14)
     pady = int(max_fs * 0.26)
-    merge = radius + int(max_fs * 0.12)  # vertical overlap between line boxes
-    cap = max_width if max_width else 10 ** 9
+    merge = radius + int(max_fs * 0.16)  # vertical overlap between line boxes
+    blur = max(3, int(max_fs * 0.34))
+    m = blur * 3  # margin so the rounding never clips at the canvas edge
+    cap = (max_width - 2 * m) if max_width else 10 ** 9
 
     line_boxes = [(min(line_w + 2 * padx, cap), line_h + 2 * pady) for *_, line_w, line_h in prepared]
-    canvas_w = max(bw for bw, _ in line_boxes)
+    inner_w = max(bw for bw, _ in line_boxes)
     tops: list[int] = []
     y = 0
     for _, bh in line_boxes:
         tops.append(y)
         y += bh - merge
-    canvas_h = tops[-1] + line_boxes[-1][1]
+    inner_h = tops[-1] + line_boxes[-1][1]
+    canvas_w, canvas_h = inner_w + 2 * m, inner_h + 2 * m
+
+    mask = Image.new("L", (canvas_w, canvas_h), 0)
+    md = ImageDraw.Draw(mask)
+    for (bw, bh), top in zip(line_boxes, tops):
+        bx = m + (inner_w - bw) // 2
+        md.rectangle([bx, m + top, bx + bw - 1, m + top + bh - 1], fill=255)
+    mask = mask.filter(ImageFilter.GaussianBlur(blur)).point(lambda p: 255 if p >= 128 else 0)
 
     img = Image.new("RGBA", (canvas_w, canvas_h), (0, 0, 0, 0))
+    img.paste(Image.new("RGBA", (canvas_w, canvas_h), (255, 255, 255, 255)), (0, 0), mask)
     d = ImageDraw.Draw(img)
-    # White boxes first (overlaps merge into one shape)...
-    for (bw, bh), top in zip(line_boxes, tops):
-        bx = (canvas_w - bw) // 2
-        r = min(radius, bh // 2, bw // 2)
-        d.rounded_rectangle([bx, top, bx + bw - 1, top + bh - 1], radius=r,
-                            fill=(255, 255, 255, 255))
-    # ...then the text on top.
     for (fs, f, runs, line_w, line_h), top in zip(prepared, tops):
-        x = (canvas_w - line_w) // 2
-        ty = top + pady
+        x = m + (inner_w - line_w) // 2
+        ty = m + top + pady
         for kind, val, w, im in runs:
             if kind == "text":
                 d.text((x, ty), val, font=f, fill=(0, 0, 0, 255))

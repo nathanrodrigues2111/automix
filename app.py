@@ -85,6 +85,20 @@ def _stable_port() -> int:
     return port
 
 
+def _splash(text: str | None = None, close: bool = False) -> None:
+    """Update or close the PyInstaller boot splash (no-op outside a frozen
+    Windows/Linux build — pyi_splash only exists when the spec bundles one)."""
+    try:
+        import pyi_splash
+
+        if text is not None:
+            pyi_splash.update_text(text)
+        if close:
+            pyi_splash.close()
+    except Exception:
+        pass
+
+
 def _build_app():
     from fastapi.staticfiles import StaticFiles
 
@@ -108,6 +122,7 @@ def _wait_until_up(port: int, timeout: float = 30.0) -> bool:
 
 
 def _launch() -> None:
+    _splash("Starting backend…")
     import uvicorn
 
     app = _build_app()
@@ -136,6 +151,7 @@ def _launch() -> None:
         raise RuntimeError("backend did not come up on 127.0.0.1")
 
     url = f"http://127.0.0.1:{port}"
+    _splash("Opening window…")
     try:
         import webview  # pywebview
 
@@ -145,7 +161,7 @@ def _launch() -> None:
         fullscreen = os.environ.get("AUTOMIX_FULLSCREEN", "").strip().lower() in (
             "1", "true", "yes", "on",
         )
-        webview.create_window(
+        window = webview.create_window(
             "Automix",
             url,
             width=1360,
@@ -153,11 +169,19 @@ def _launch() -> None:
             min_size=(1024, 680),
             fullscreen=fullscreen,
         )
+        # Keep the splash up until the real window is on screen (falls back to
+        # closing it now if this pywebview has no shown event).
+        try:
+            window.events.shown += lambda: _splash(close=True)
+        except Exception:
+            _splash(close=True)
         webview.start()
+        _splash(close=True)  # in case the shown event never fired
     except Exception as e:
         # No native webview available: fall back to the default browser and
         # keep the server alive.
         print(f"native window unavailable ({e}); opening browser", file=sys.stderr)
+        _splash(close=True)
         import webbrowser
 
         webbrowser.open(url)
@@ -179,6 +203,7 @@ def main_entry() -> None:
         import traceback
 
         tb = traceback.format_exc()
+        _splash(close=True)  # don't leave the splash floating over the error
         print(tb, file=sys.stderr)
         try:
             (DATA_DIR / "startup-error.log").write_text(tb, encoding="utf-8")

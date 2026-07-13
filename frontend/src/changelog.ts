@@ -11,8 +11,9 @@ export const CHANGELOG: ChangelogEntry[] = [
   {
     version: "0.13.1",
     date: "2026-07-13",
-    title: "Startup problems are visible now",
+    title: "A splash screen while the app starts",
     items: [
+      "The desktop app now shows a splash screen the moment you launch it, with a status line while it boots, so you know it is loading instead of staring at nothing (Windows and Linux)",
       "If the desktop app fails to start, it now tells you what went wrong: a message box appears on Windows and the details are saved to Automix/startup-error.log in your home folder, instead of the app silently never opening",
       "New scripts to build the Windows app locally on your own machine (build-windows.bat one-click launcher), without waiting for a cloud build",
     ],

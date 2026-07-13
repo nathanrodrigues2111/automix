@@ -64,9 +64,34 @@ a = Analysis(
 )
 pyz = PYZ(a.pure)
 
+# Boot splash: shows within ~a second of launching the exe, long before
+# Python/uvicorn are up; app.py updates its status line and closes it once the
+# window is on screen. Not supported by PyInstaller on macOS, and it needs
+# Tcl/Tk SHARED libraries on the BUILD machine (CI's setup-python has them;
+# uv-managed local pythons don't, and Splash aborts the build) — so skip the
+# splash, never fail the build, when they're unavailable.
+splash = None
+if sys.platform != "darwin":
+    try:
+        splash = Splash(
+            str(ROOT / "packaging" / "splash.png"),
+            binaries=a.binaries,
+            datas=a.datas,
+            text_pos=(20, 360),
+            text_size=10,
+            text_color="#7d8aa0",
+            text_default="Starting…",
+            minify_script=True,
+            always_on_top=False,
+        )
+    except BaseException as e:  # Splash raises SystemExit when Tcl/Tk is missing
+        print(f"splash screen skipped: {e}", file=sys.stderr)
+        splash = None
+
 exe = EXE(
     pyz,
     a.scripts,
+    *([splash] if splash else []),
     [],
     exclude_binaries=True,
     name="Automix",
@@ -79,6 +104,7 @@ exe = EXE(
 )
 coll = COLLECT(
     exe,
+    *([splash.binaries] if splash else []),
     a.binaries,
     a.datas,
     name="Automix",

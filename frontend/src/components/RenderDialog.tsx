@@ -398,7 +398,7 @@ export function RenderDialog({
         )}
           </div>
 
-          {!isPreview && config.make_short !== false && (
+          {!jobId && !isPreview && config.make_short !== false && (
             <div className="shrink-0 sm:w-[210px]">
               <ShortPreview config={{ ...config, short_title: shortTitle }} />
             </div>

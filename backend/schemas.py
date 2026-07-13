@@ -138,6 +138,7 @@ class RenderRecord(BaseModel):
 class Project(BaseModel):
     id: str
     name: str
+    slug: str = ""
     created_at: str
     updated_at: str
     config: dict
@@ -145,7 +146,15 @@ class Project(BaseModel):
 
 class ProjectCreate(BaseModel):
     name: str
-    config: dict
+    config: dict = {}
+
+
+class ProjectRename(BaseModel):
+    name: str
+
+
+class ProjectConfig(BaseModel):
+    config: dict = {}
 
 
 class WaveformResponse(BaseModel):

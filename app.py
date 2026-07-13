@@ -49,10 +49,40 @@ if not DIST_DIR.is_dir():
     DIST_DIR = BASE / "frontend" / "dist"
 
 
+def _port_is_free(port: int) -> bool:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        return s.connect_ex(("127.0.0.1", port)) != 0
+
+
 def _free_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.bind(("127.0.0.1", 0))
         return s.getsockname()[1]
+
+
+def _stable_port() -> int:
+    """Return a port that stays the same across launches.
+
+    The frontend persists all its settings in localStorage, which is keyed by
+    origin (scheme + host + PORT). A random port every launch = a fresh, empty
+    localStorage every launch, so the user's settings appear to reset. Pin a
+    remembered port (default 8770) so the origin is stable; only pick a new one
+    if it is genuinely occupied, and remember that choice too.
+    """
+    remembered = DATA_DIR / "port"
+    try:
+        saved = int(remembered.read_text().strip())
+        if 1024 <= saved <= 65535 and _port_is_free(saved):
+            return saved
+    except Exception:
+        pass
+
+    port = 8770 if _port_is_free(8770) else _free_port()
+    try:
+        remembered.write_text(str(port), encoding="utf-8")
+    except Exception:
+        pass
+    return port
 
 
 def _build_app():
@@ -81,7 +111,7 @@ def _launch() -> None:
     import uvicorn
 
     app = _build_app()
-    port = _free_port()
+    port = _stable_port()
 
     def serve() -> None:
         uvicorn.run(app, host="127.0.0.1", port=port, log_level="warning")

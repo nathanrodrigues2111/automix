@@ -296,15 +296,15 @@ export function useProjects() {
   })
 }
 
-export function useProject(id: string | null) {
+export function useActiveProject() {
   return useQuery({
-    queryKey: ["project", id],
-    queryFn: () => http<Project>(`/api/projects/${id}`),
-    enabled: !!id,
+    queryKey: ["project", "active"],
+    queryFn: () => http<Project>("/api/projects/active"),
+    refetchOnWindowFocus: false,
   })
 }
 
-export function useSaveProject() {
+export function useCreateProject() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: (body: ProjectCreate) =>
@@ -314,6 +314,62 @@ export function useSaveProject() {
       }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["projects"] })
+    },
+  })
+}
+
+export function useRenameProject() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, name }: { id: string; name: string }) =>
+      http<Project>(`/api/projects/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ name }),
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["projects"] })
+      qc.invalidateQueries({ queryKey: ["project", "active"] })
+    },
+  })
+}
+
+export function useDeleteProject() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) =>
+      http<DeleteResponse>(`/api/projects/${id}`, { method: "DELETE" }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["projects"] })
+      qc.invalidateQueries({ queryKey: ["project", "active"] })
+    },
+  })
+}
+
+export function useActivateProject() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) =>
+      http<Project>(`/api/projects/${id}/activate`, { method: "POST" }),
+    onSuccess: () => {
+      // The active project defines which imports/mixes the library shows.
+      qc.invalidateQueries({ queryKey: ["projects"] })
+      qc.invalidateQueries({ queryKey: ["project", "active"] })
+      qc.invalidateQueries({ queryKey: ["tracks"] })
+      qc.invalidateQueries({ queryKey: ["mixes"] })
+    },
+  })
+}
+
+export function useSaveProjectConfig() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, config }: { id: string; config: Partial<RenderConfig> }) =>
+      http<Project>(`/api/projects/${id}/config`, {
+        method: "PUT",
+        body: JSON.stringify({ config }),
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["project", "active"] })
     },
   })
 }

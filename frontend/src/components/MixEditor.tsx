@@ -53,8 +53,6 @@ interface MixEditorProps {
    *  video player as the program monitor. */
   preview: LivePreview
   onRender: () => void
-  onSaveProject: () => void
-  onLoadProject: () => void
 }
 
 export function MixEditor({
@@ -63,8 +61,6 @@ export function MixEditor({
   setClips,
   preview,
   onRender,
-  onSaveProject,
-  onLoadProject,
 }: MixEditorProps) {
   const [query, setQuery] = useState("")
   const [confirmClear, setConfirmClear] = useState(false)
@@ -127,24 +123,6 @@ export function MixEditor({
             </span>
             Mix Editor
           </CardTitle>
-          <div className="flex shrink-0 gap-1">
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={onLoadProject}
-              className="h-7 px-2 text-xs"
-            >
-              Load
-            </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={onSaveProject}
-              className="h-7 px-2 text-xs"
-            >
-              Save
-            </Button>
-          </div>
         </div>
         <div className="grid grid-cols-2 gap-2">
           <Button

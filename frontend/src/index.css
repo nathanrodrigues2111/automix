@@ -173,6 +173,42 @@
   }
 }
 
+/* Floating job / render indicators and the compact status dropdown: a subtle
+   fade + slide UP from below so they rise into place rather than snap in. */
+@keyframes automix-pop-in {
+  from {
+    opacity: 0;
+    transform: translateY(12px) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+.automix-pop-in {
+  animation: automix-pop-in 0.28s cubic-bezier(0.16, 1, 0.3, 1);
+}
+/* Exit: fade + slide DOWN out of view (a finished import dismisses itself). */
+@keyframes automix-pop-out {
+  from {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(12px) scale(0.97);
+  }
+}
+.automix-pop-out {
+  animation: automix-pop-out 0.26s cubic-bezier(0.4, 0, 1, 1) forwards;
+}
+@media (prefers-reduced-motion: reduce) {
+  .automix-pop-in,
+  .automix-pop-out {
+    animation-duration: 0.01ms;
+  }
+}
+
 /* Vidstack player — wire the chrome to the app's EDM accent. */
 .automix-player {
   --media-brand: var(--primary);

@@ -1,4 +1,5 @@
 import { Fragment, useEffect, useRef, useState } from "react"
+import { createPortal } from "react-dom"
 import { useQueryClient } from "@tanstack/react-query"
 import { toast } from "sonner"
 import {
@@ -95,6 +96,9 @@ export function AutomixPanel({
   const [urlError, setUrlError] = useState<string | null>(null)
   const [job, setJob] = useState<{ id: string; kind: JobKind } | null>(null)
   const [panelHidden, setPanelHidden] = useState(false)
+  // While true, the status panel / mini indicator plays its slide-down exit
+  // (a finished import dismisses itself rather than settling into a card).
+  const [closing, setClosing] = useState(false)
   const [log, setLog] = useState<LogLine[]>([])
   const [showLog, setShowLog] = useState(true)
   const logRef = useRef<HTMLDivElement>(null)
@@ -117,6 +121,7 @@ export function AutomixPanel({
   useEffect(() => {
     setLog([])
     setPanelHidden(false)
+    setClosing(false)
   }, [job?.id])
 
   // Dismiss the floating status dropdown on any click outside the widget
@@ -221,6 +226,24 @@ export function AutomixPanel({
     automix.reset()
     youtubeImport.reset()
   }
+
+  // A finished import self-dismisses: the tracks are already in the library and
+  // a toast fired, so it never settles into a completion card — after a brief
+  // beat at 100% it plays the slide-down exit, then unmounts. Errors and
+  // cancellations stay put (they need a "Try again" / acknowledgement), and
+  // Auto-Mix keeps its panel (the finished-mix player lives there).
+  useEffect(() => {
+    if (job?.kind !== "import" || !p?.done) return
+    const msg = p.message.toLowerCase()
+    if (msg === "cancelled" || msg.startsWith("error")) return
+    const startExit = window.setTimeout(() => setClosing(true), 700)
+    const finish = window.setTimeout(reset, 960) // 700 + exit anim (~260ms)
+    return () => {
+      window.clearTimeout(startExit)
+      window.clearTimeout(finish)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [job, p?.done, p?.message])
 
   const openChooser = () => {
     const u = validateUrl()
@@ -653,17 +676,8 @@ export function AutomixPanel({
           </div>
         )}
 
-        {done && !isError && p?.message !== "Cancelled" && job?.kind === "import" && (
-          <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-3">
-            <span className="flex min-w-0 items-center gap-2 text-sm font-medium text-emerald-600 dark:text-emerald-400">
-              <CheckCircle2 className="h-4 w-4 shrink-0" />
-              <span className="truncate">{p?.message || "Import complete"}</span>
-            </span>
-            <Button variant="ghost" size="sm" onClick={reset} className="h-7 text-xs">
-              <RotateCcw className="h-3 w-3" /> Import more
-            </Button>
-          </div>
-        )}
+        {/* Imports don't settle into a completion card — the panel plays its
+            slide-down exit and unmounts (see the auto-dismiss effect above). */}
 
         {outputPath && (
           <div className="space-y-2 rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-3">
@@ -722,7 +736,12 @@ export function AutomixPanel({
         {chooserEl}
         {formEl}
         {hasStatus && !panelHidden && (
-          <div className="absolute inset-x-0 top-full z-50 mt-2 space-y-3 rounded-xl border border-border/60 bg-popover/95 p-3 pt-8 shadow-2xl backdrop-blur">
+          <div
+            className={cn(
+              "absolute inset-x-0 top-full z-50 mt-2 space-y-3 rounded-xl border border-border/60 bg-popover/95 p-3 pt-8 shadow-2xl backdrop-blur",
+              closing ? "automix-pop-out" : "automix-pop-in",
+            )}
+          >
             <button
               type="button"
               onClick={() => setPanelHidden(true)}
@@ -734,6 +753,50 @@ export function AutomixPanel({
             </button>
             {statusEl}
           </div>
+        )}
+        {/* Minimized indicator so a hidden job stays reachable (mirrors the
+            floating render indicator). Clicking it reopens the full panel.
+            Portaled to <body>: the header's backdrop-filter is a containing
+            block, so a `fixed` child would anchor to the header, not the
+            viewport (it landed top-right instead of bottom-right). */}
+        {job && panelHidden && createPortal(
+          <button
+            type="button"
+            onClick={() => setPanelHidden(false)}
+            title="Show progress"
+            className={cn(
+              "fixed bottom-4 right-4 z-50 w-64 rounded-xl border border-border/70 bg-popover/95 p-3 text-left shadow-2xl backdrop-blur transition-colors hover:border-primary/50",
+              closing ? "automix-pop-out" : "automix-pop-in",
+            )}
+          >
+            <div className="flex items-center gap-2">
+              {running ? (
+                <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-primary" />
+              ) : isError ? (
+                <AlertCircle className="h-3.5 w-3.5 shrink-0 text-destructive" />
+              ) : (
+                <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-emerald-500" />
+              )}
+              <span className="flex-1 truncate text-xs font-semibold uppercase tracking-wider text-primary/80">
+                {job.kind === "import" ? "Importing" : "Auto-Mix"}
+              </span>
+              <span className="shrink-0 font-mono text-[11px] tabular-nums text-muted-foreground">
+                {(p?.percent ?? 0).toFixed(0)}%
+              </span>
+            </div>
+            {!done && (
+              <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-secondary/60">
+                <div
+                  className="h-full rounded-full bg-primary transition-all"
+                  style={{ width: `${(p?.percent ?? 0).toFixed(0)}%` }}
+                />
+              </div>
+            )}
+            <div className="mt-1.5 truncate text-[11px] text-muted-foreground">
+              {p?.message ?? "Starting…"}
+            </div>
+          </button>,
+          document.body,
         )}
       </div>
     )

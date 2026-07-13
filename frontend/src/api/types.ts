@@ -198,14 +198,16 @@ export interface RenderRecord {
 export interface Project {
   id: string
   name: string
+  slug: string
   created_at: string
   updated_at: string
-  config: RenderConfig
+  config: Partial<RenderConfig>
+  active?: boolean
 }
 
 export interface ProjectCreate {
   name: string
-  config: RenderConfig
+  config?: Partial<RenderConfig>
 }
 
 export type ModelState = "ready" | "missing" | "downloading" | "unavailable"

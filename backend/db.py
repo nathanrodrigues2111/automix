@@ -54,12 +54,22 @@ def init_db() -> None:
             CREATE TABLE IF NOT EXISTS projects (
                 id TEXT PRIMARY KEY,
                 name TEXT NOT NULL,
+                slug TEXT,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 config_json TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS app_state (
+                key TEXT PRIMARY KEY,
+                value TEXT
+            );
             """
         )
+        # Older databases predate the `slug` column (projects used to mean a
+        # saved render config). Add it in place so nothing is lost.
+        cols = {r["name"] for r in c.execute("PRAGMA table_info(projects)").fetchall()}
+        if "slug" not in cols:
+            c.execute("ALTER TABLE projects ADD COLUMN slug TEXT")
 
 
 def _now_iso() -> str:
@@ -167,16 +177,31 @@ def list_renders() -> list[dict[str, Any]]:
         ]
 
 
-def add_project(project_id: str, name: str, config: dict[str, Any]) -> dict[str, Any]:
+def _project_row(row: sqlite3.Row) -> dict[str, Any]:
+    return {
+        "id": row["id"],
+        "name": row["name"],
+        "slug": row["slug"] or "",
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+        "config": json.loads(row["config_json"]),
+    }
+
+
+def add_project(
+    project_id: str, name: str, slug: str, config: dict[str, Any]
+) -> dict[str, Any]:
     now = _now_iso()
     with _DB_LOCK, _conn() as c:
         c.execute(
-            "INSERT INTO projects (id, name, created_at, updated_at, config_json) VALUES (?, ?, ?, ?, ?)",
-            (project_id, name, now, now, json.dumps(config)),
+            "INSERT INTO projects (id, name, slug, created_at, updated_at, config_json) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (project_id, name, slug, now, now, json.dumps(config)),
         )
     return {
         "id": project_id,
         "name": name,
+        "slug": slug,
         "created_at": now,
         "updated_at": now,
         "config": config,
@@ -186,32 +211,74 @@ def add_project(project_id: str, name: str, config: dict[str, Any]) -> dict[str,
 def get_project(project_id: str) -> dict[str, Any] | None:
     with _DB_LOCK, _conn() as c:
         row = c.execute(
-            "SELECT id, name, created_at, updated_at, config_json FROM projects WHERE id = ?",
+            "SELECT id, name, slug, created_at, updated_at, config_json "
+            "FROM projects WHERE id = ?",
             (project_id,),
         ).fetchone()
-        if not row:
-            return None
-        return {
-            "id": row["id"],
-            "name": row["name"],
-            "created_at": row["created_at"],
-            "updated_at": row["updated_at"],
-            "config": json.loads(row["config_json"]),
-        }
+        return _project_row(row) if row else None
 
 
 def list_projects() -> list[dict[str, Any]]:
     with _DB_LOCK, _conn() as c:
         rows = c.execute(
-            "SELECT id, name, created_at, updated_at, config_json FROM projects ORDER BY updated_at DESC"
+            "SELECT id, name, slug, created_at, updated_at, config_json "
+            "FROM projects ORDER BY updated_at DESC"
         ).fetchall()
-        return [
-            {
-                "id": r["id"],
-                "name": r["name"],
-                "created_at": r["created_at"],
-                "updated_at": r["updated_at"],
-                "config": json.loads(r["config_json"]),
-            }
-            for r in rows
-        ]
+        return [_project_row(r) for r in rows]
+
+
+def rename_project(project_id: str, name: str) -> None:
+    with _DB_LOCK, _conn() as c:
+        c.execute(
+            "UPDATE projects SET name = ?, updated_at = ? WHERE id = ?",
+            (name, _now_iso(), project_id),
+        )
+
+
+def update_project_config(project_id: str, config: dict[str, Any]) -> None:
+    with _DB_LOCK, _conn() as c:
+        c.execute(
+            "UPDATE projects SET config_json = ?, updated_at = ? WHERE id = ?",
+            (json.dumps(config), _now_iso(), project_id),
+        )
+
+
+def touch_project(project_id: str) -> None:
+    """Bump updated_at so the most recently opened project sorts first."""
+    with _DB_LOCK, _conn() as c:
+        c.execute(
+            "UPDATE projects SET updated_at = ? WHERE id = ?",
+            (_now_iso(), project_id),
+        )
+
+
+def delete_project(project_id: str) -> None:
+    with _DB_LOCK, _conn() as c:
+        c.execute("DELETE FROM projects WHERE id = ?", (project_id,))
+
+
+def get_app_state(key: str) -> str | None:
+    with _DB_LOCK, _conn() as c:
+        try:
+            row = c.execute(
+                "SELECT value FROM app_state WHERE key = ?", (key,)
+            ).fetchone()
+        except sqlite3.OperationalError:
+            return None
+        return row["value"] if row else None
+
+
+def set_app_state(key: str, value: str) -> None:
+    with _DB_LOCK, _conn() as c:
+        c.execute(
+            "INSERT OR REPLACE INTO app_state (key, value) VALUES (?, ?)",
+            (key, value),
+        )
+
+
+def get_active_project_id() -> str | None:
+    return get_app_state("active_project_id")
+
+
+def set_active_project_id(project_id: str) -> None:
+    set_app_state("active_project_id", project_id)

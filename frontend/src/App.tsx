@@ -3,6 +3,7 @@ import type { MediaPlayerInstance } from "@vidstack/react"
 import { toast } from "sonner"
 import {
   Disc3,
+  FolderOpen,
   Plus,
   ListMusic,
   Monitor,
@@ -26,13 +27,19 @@ import { Timeline } from "@/components/Timeline"
 import { VideoPreview } from "@/components/VideoPreview"
 import { MixEditor, type EditorClip } from "@/components/MixEditor"
 import { ModelStatusBanner } from "@/components/ModelDownloadDialog"
-import { ProjectManager } from "@/components/ProjectManager"
+import { ProjectsDialog } from "@/components/ProjectsScreen"
 import { RenderDialog } from "@/components/RenderDialog"
 import { SettingsDialog } from "@/components/SettingsDialog"
 import { Tour, type TourStep } from "@/components/Tour"
-import { useFonts, useRefreshTitles, useTracks } from "@/api/client"
+import {
+  useActiveProject,
+  useFonts,
+  useRefreshTitles,
+  useSaveProjectConfig,
+  useTracks,
+} from "@/api/client"
 import { ensureFontLoaded } from "@/lib/fonts"
-import type { Drop, Project, RenderConfig, Track } from "@/api/types"
+import type { Drop, RenderConfig, Track } from "@/api/types"
 import { useLivePreview } from "@/hooks/useLivePreview"
 import { useProgressSocket } from "@/hooks/useProgressSocket"
 import { toggleActivePlayback } from "@/lib/audioFocus"
@@ -213,6 +220,11 @@ function loadStoredSettings(): StoredSettings {
 export default function App() {
   const tracks = useTracks()
   const progress = useProgressSocket()
+  // The projects modal opens on startup; the workspace (scoped to the active
+  // project on the backend) sits underneath. Closing it just returns here.
+  const [projectsOpen, setProjectsOpen] = useState(true)
+  const activeProject = useActiveProject()
+  const saveConfig = useSaveProjectConfig()
 
   const [selectedTrackId, setSelectedTrackId] = useState<string | null>(null)
   const [dropStart, setDropStart] = useState(0)
@@ -220,9 +232,10 @@ export default function App() {
   const [currentTime, setCurrentTime] = useState(0)
 
   const [clips, setClips] = useState<EditorClip[]>([])
+  // Config is per-project now (seeded from the active project below, auto-saved
+  // back to it). Start from defaults until the active project loads.
   const [config, setConfig] = useState<Omit<RenderConfig, "clips">>(() => ({
     ...DEFAULT_CONFIG,
-    ...loadStoredSettings().config,
   }))
   const [loopPreviews, setLoopPreviews] = useState<boolean>(
     () => loadStoredSettings().loopPreviews ?? true,
@@ -249,13 +262,12 @@ export default function App() {
     if (titleFont) void ensureFontLoaded(titleFont).catch(() => {})
   }, [titleFont])
 
-  // Persist tuning settings across reloads.
+  // Persist global (not per-project) preferences across reloads.
   useEffect(() => {
     try {
       localStorage.setItem(
         SETTINGS_KEY,
         JSON.stringify({
-          config,
           loopPreviews,
           automixEnabled,
         } satisfies StoredSettings),
@@ -263,11 +275,37 @@ export default function App() {
     } catch {
       // storage unavailable — settings just won't persist
     }
-  }, [config, loopPreviews, automixEnabled])
+  }, [loopPreviews, automixEnabled])
 
-  const [projectDialog, setProjectDialog] = useState<"save" | "load" | null>(
-    null,
-  )
+  // Seed the config from the active project once (per project id), then
+  // auto-save any edits back to that project (debounced). skipSaveRef swallows
+  // the change that the seed itself triggers so it isn't written straight back.
+  const seededProjectRef = useRef<string | null>(null)
+  const skipConfigSaveRef = useRef(false)
+  useEffect(() => {
+    const p = activeProject.data
+    if (!p || seededProjectRef.current === p.id) return
+    seededProjectRef.current = p.id
+    const { clips: _clips, ...cfg } = (p.config ?? {}) as Record<string, unknown>
+    const defined = Object.fromEntries(
+      Object.entries(cfg).filter(([, v]) => v !== undefined && v !== null),
+    ) as Partial<Omit<RenderConfig, "clips">>
+    skipConfigSaveRef.current = true
+    setConfig({ ...DEFAULT_CONFIG, ...defined })
+  }, [activeProject.data])
+
+  useEffect(() => {
+    const id = activeProject.data?.id
+    if (!id || seededProjectRef.current !== id) return
+    if (skipConfigSaveRef.current) {
+      skipConfigSaveRef.current = false
+      return
+    }
+    const t = window.setTimeout(() => saveConfig.mutate({ id, config }), 700)
+    return () => window.clearTimeout(t)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [config, activeProject.data?.id])
+
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [tourStep, setTourStep] = useState<number | null>(null)
   const [tracksDrawerOpen, setTracksDrawerOpen] = useState(false)
@@ -697,17 +735,6 @@ export default function App() {
     [clips, trackById],
   )
 
-  const handleLoadProject = (p: Project) => {
-    // Preserve every config field the project carries; fall back to defaults
-    // for anything missing (older projects may predate newer options).
-    const { clips: loadedClips, ...loadedConfig } = p.config
-    const defined = Object.fromEntries(
-      Object.entries(loadedConfig).filter(([, v]) => v !== undefined && v !== null),
-    ) as Partial<Omit<RenderConfig, "clips">>
-    setConfig({ ...DEFAULT_CONFIG, ...defined })
-    setClips(loadedClips.map((c) => ({ ...c, uid: uid() })))
-  }
-
   // Shared between the desktop sidebar and the mobile slide-in drawer.
   const trackListEl = (
     <TrackList
@@ -748,6 +775,18 @@ export default function App() {
           />
         </div>
         <div className="flex shrink-0 items-center gap-1.5">
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => setProjectsOpen(true)}
+            title="Switch project"
+            className="h-8 max-w-[180px] gap-1.5 text-xs text-muted-foreground hover:text-foreground"
+          >
+            <FolderOpen className="h-3.5 w-3.5 shrink-0 text-primary" />
+            <span className="truncate">
+              {activeProject.data?.name ?? "Projects"}
+            </span>
+          </Button>
           <ThemeToggle />
           <Button
             variant="ghost"
@@ -1030,8 +1069,6 @@ export default function App() {
               setRenderJobId(null)
               setRenderMode("full")
             }}
-            onSaveProject={() => setProjectDialog("save")}
-            onLoadProject={() => setProjectDialog("load")}
           />
         </aside>
       </main>
@@ -1104,11 +1141,10 @@ export default function App() {
           setTourStep(0)
         }}
       />
-      <ProjectManager
-        mode={projectDialog}
-        onClose={() => setProjectDialog(null)}
-        currentConfig={renderConfig}
-        onLoad={handleLoadProject}
+      <ProjectsDialog
+        open={projectsOpen}
+        onOpenChange={setProjectsOpen}
+        onOpen={() => setProjectsOpen(false)}
       />
       <RenderDialog
         open={renderMode !== null}
@@ -1126,7 +1162,7 @@ export default function App() {
         const rerr = rdone && !!rp && rp.message.toLowerCase().startsWith("error")
         const ok = rdone && !rerr && rp?.message !== "Cancelled"
         return (
-          <div className="fixed bottom-4 right-4 z-50 w-72 rounded-xl border border-border/70 bg-popover/95 p-3 shadow-2xl backdrop-blur">
+          <div className="automix-pop-in fixed bottom-4 right-4 z-50 w-72 rounded-xl border border-border/70 bg-popover/95 p-3 shadow-2xl backdrop-blur">
             <div className="flex items-center justify-between gap-2">
               <span className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-primary/80">
                 {rdone ? (ok ? "Render ready" : "Render") : "Rendering"}

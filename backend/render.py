@@ -971,27 +971,29 @@ def _display_title(src: Path) -> str:
 
 
 def _export_path(clips: list[dict], srcs: list[Path], config: dict) -> Path:
-    """Final export path. Each render gets its own folder under exports/,
-    named after the export title, holding the full mix, its Short, and the
-    verification report together instead of loose files. Default style names
-    the folder after the first source video plus the local date and time so
-    repeated renders never overlap (exports/<Video_Name>_20260705_1731/
-    automix_<Video_Name>_20260705_1731.mp4); the "timestamp" style uses the
-    UTC timestamp. The automix_ file prefix is REQUIRED — main.py tells
-    exports from imports by it.
+    """Final export path, directly inside the active project's export folder
+    (config["exports_dir"], i.e. videos/exports/<project>/). The full mix, its
+    Short, and the verification report sit side by side sharing one stem.
+    Default style names the file after the first source video plus the local
+    date and time so repeated renders never overlap
+    (exports/<project>/automix_<Video_Name>_20260705_1731.mp4); the "timestamp"
+    style uses the UTC timestamp. The automix_ file prefix is REQUIRED —
+    main.py tells exports from imports by it.
     """
+    root = Path(config.get("exports_dir") or EXPORTS_DIR)
+    root.mkdir(parents=True, exist_ok=True)
     style = str(config.get("filename_style", "file"))
     if style != "timestamp" and srcs:
         stem = re.sub(r"\s*\[[A-Za-z0-9_-]{8,12}\]\s*$", "", srcs[0].stem)
         slug = re.sub(r"[^A-Za-z0-9]+", "_", stem).strip("_")[:48]
         if slug:
             local_ts = datetime.now().strftime("%Y%m%d_%H%M")
-            folder = EXPORTS_DIR / f"{slug}_{local_ts}"
-            while folder.exists():
-                folder = EXPORTS_DIR / f"{slug}_{local_ts}_{random.randint(10, 99)}"
-            return folder / f"automix_{slug}_{local_ts}.mp4"
+            out = root / f"automix_{slug}_{local_ts}.mp4"
+            while out.exists():
+                out = root / f"automix_{slug}_{local_ts}_{random.randint(10, 99)}.mp4"
+            return out
     ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    return EXPORTS_DIR / f"automix_{ts}" / f"automix_{ts}.mp4"
+    return root / f"automix_{ts}.mp4"
 
 
 # ---------- YouTube Shorts (vertical 1080x1920 with the edmpapa template) ----
@@ -2178,7 +2180,6 @@ def render_mix(
         }
 
     _check_cancel()
-    EXPORTS_DIR.mkdir(parents=True, exist_ok=True)
     out_path = _export_path(clips, srcs, config)
     windows: list[tuple[str, float, float]] = []
     # VIDEO-ONLY passes first (branding, intro overlay); the audio joins in

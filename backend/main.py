@@ -61,6 +61,60 @@ for _p in VIDEOS_DIR.glob("*.mp4"):
         _p.rename(_dest)
 
 
+# ---------- Projects (per-project import/export folders) ----------
+#
+# A "project" is a workspace: its own imports/<slug>/ folder of downloaded
+# tracks and exports/<slug>/ folder of rendered mixes, so switching projects
+# fully isolates one set of videos from another. IMPORTS_DIR / EXPORTS_DIR above
+# are the ROOTS; the active project's subfolders are resolved per request.
+
+
+def _slugify(name: str) -> str:
+    s = re.sub(r"[^A-Za-z0-9]+", "-", name).strip("-").lower()[:48]
+    return s or "project"
+
+
+def _unique_slug(base: str) -> str:
+    existing = {p.get("slug") for p in db.list_projects()}
+    slug, i = base, 2
+    while slug in existing:
+        slug, i = f"{base}-{i}", i + 1
+    return slug
+
+
+def _create_project(name: str, config: dict | None = None) -> dict:
+    pid = uuid.uuid4().hex
+    slug = _unique_slug(_slugify(name))
+    proj = db.add_project(pid, name.strip() or "Untitled", slug, config or {})
+    (IMPORTS_DIR / slug).mkdir(parents=True, exist_ok=True)
+    (EXPORTS_DIR / slug).mkdir(parents=True, exist_ok=True)
+    return proj
+
+
+def _active_project() -> dict:
+    """The currently open project. Falls back to the most recent one, creating
+    a 'Default' only if none exist yet (first run)."""
+    pid = db.get_active_project_id()
+    proj = db.get_project(pid) if pid else None
+    if proj is None:
+        projs = db.list_projects()
+        proj = projs[0] if projs else _create_project("Default")
+        db.set_active_project_id(proj["id"])
+    return proj
+
+
+def active_imports_dir() -> Path:
+    d = IMPORTS_DIR / _active_project()["slug"]
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def active_exports_dir() -> Path:
+    d = EXPORTS_DIR / _active_project()["slug"]
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
 def _rekey_moved_files() -> None:
     """The file hash is path-based, so files that migrated from videos/ into
     imports/ got new hashes — re-point their DB rows (analysis, titles) and
@@ -205,10 +259,11 @@ _TRACK_PATH_CACHE: dict[str, Path] = {}
 
 
 def _scan_tracks() -> list[dict]:
-    if not IMPORTS_DIR.exists():
+    imports_dir = active_imports_dir()
+    if not imports_dir.exists():
         return []
     tracks: list[dict] = []
-    for path in sorted(IMPORTS_DIR.rglob("*.mp4")):
+    for path in sorted(imports_dir.rglob("*.mp4")):
         # Render outputs live in exports/, but skip strays defensively.
         if path.name.startswith("automix_"):
             continue
@@ -271,7 +326,7 @@ def _resolve_track_path(track_id: str) -> Path:
     cached = _TRACK_PATH_CACHE.get(track_id)
     if cached is not None and cached.exists():
         return cached
-    for path in IMPORTS_DIR.rglob("*.mp4"):
+    for path in active_imports_dir().rglob("*.mp4"):
         tid = analysis_mod.file_hash(path)[:16]
         _TRACK_PATH_CACHE[tid] = path
         if tid == track_id:
@@ -412,7 +467,7 @@ async def post_reveal(req: RevealRequest) -> dict:
     """Open the containing folder in the system file manager (local tool).
     Tries FileManager1 ShowItems (selects the file), falls back to xdg-open
     on the directory."""
-    target = (VIDEOS_DIR.parent / req.path.lstrip("/")).resolve() if req.path else EXPORTS_DIR
+    target = (VIDEOS_DIR.parent / req.path.lstrip("/")).resolve() if req.path else active_exports_dir()
     if not str(target).startswith(str(VIDEOS_DIR.resolve())):
         raise HTTPException(status_code=400, detail="path outside the videos library")
     if not target.exists():
@@ -535,6 +590,8 @@ async def post_render(req: schemas.RenderRequest) -> dict:
     progress = make_progress(job_id)
     cancel_ev = _register_cancel(job_id)
     config = req.model_dump()
+    # Render into the active project's export folder (exports/<slug>/).
+    config["exports_dir"] = str(active_exports_dir())
 
     async def _run():
         try:
@@ -791,7 +848,7 @@ async def post_youtube_import(req: schemas.YouTubeImportRequest) -> dict:
             results = await asyncio.to_thread(
                 youtube_mod.import_playlist,
                 req.url,
-                IMPORTS_DIR,
+                active_imports_dir(),
                 dl_progress,
                 req.max_tracks,
                 req.video_ids,
@@ -920,7 +977,7 @@ def _automix_pipeline(req: schemas.AutomixRequest, progress, cancel=None) -> dic
             progress("download", min(30.0, pct * 0.30), msg)
 
         youtube_mod.import_playlist(
-            req.url, IMPORTS_DIR, dl_progress, req.max_tracks, req.video_ids, cancel,
+            req.url, active_imports_dir(), dl_progress, req.max_tracks, req.video_ids, cancel,
             req.max_height,
         )
 
@@ -929,7 +986,7 @@ def _automix_pipeline(req: schemas.AutomixRequest, progress, cancel=None) -> dic
         paths = [_resolve_track_path(tid) for tid in req.track_ids]
     else:
         paths = [
-            p for p in sorted(IMPORTS_DIR.rglob("*.mp4"))
+            p for p in sorted(active_imports_dir().rglob("*.mp4"))
             if not p.name.startswith("automix_")
         ]
     if not paths:
@@ -1108,7 +1165,12 @@ def _automix_pipeline(req: schemas.AutomixRequest, progress, cancel=None) -> dic
             c["start_s"] = max(0.0, c["kick_s"] - breath)
 
     # 5. Render, mapped to 70-100%.
-    config = {**AUTOMIX_DEFAULT_CONFIG, **(req.config or {}), "clips": clips}
+    config = {
+        **AUTOMIX_DEFAULT_CONFIG,
+        **(req.config or {}),
+        "clips": clips,
+        "exports_dir": str(active_exports_dir()),
+    }
 
     def render_progress(stage: str, pct: float, msg: str = "") -> None:
         progress("render", min(99.5, 70.0 + pct * 0.30), msg)
@@ -1162,15 +1224,34 @@ async def get_renders() -> list[dict]:
     return await asyncio.to_thread(db.list_renders)
 
 
-@app.post("/api/projects")
-async def post_project(payload: schemas.ProjectCreate) -> dict:
-    pid = uuid.uuid4().hex
-    return await asyncio.to_thread(db.add_project, pid, payload.name, payload.config)
-
-
 @app.get("/api/projects")
 async def list_projects() -> list[dict]:
-    return await asyncio.to_thread(db.list_projects)
+    def _run() -> list[dict]:
+        projs = db.list_projects()
+        if not projs:
+            # First run: seed a Default so there's always something to open.
+            projs = [_create_project("Default")]
+        active = db.get_active_project_id()
+        for p in projs:
+            p["active"] = p["id"] == active
+        return projs
+
+    return await asyncio.to_thread(_run)
+
+
+@app.get("/api/projects/active")
+async def get_active_project() -> dict:
+    return await asyncio.to_thread(_active_project)
+
+
+@app.post("/api/projects")
+async def post_project(payload: schemas.ProjectCreate) -> dict:
+    def _run() -> dict:
+        proj = _create_project(payload.name, payload.config)
+        db.set_active_project_id(proj["id"])  # open the new project immediately
+        return proj
+
+    return await asyncio.to_thread(_run)
 
 
 @app.get("/api/projects/{project_id}")
@@ -1181,16 +1262,75 @@ async def get_project(project_id: str) -> dict:
     return p
 
 
+@app.patch("/api/projects/{project_id}")
+async def patch_project(project_id: str, payload: schemas.ProjectRename) -> dict:
+    def _run() -> dict:
+        if not db.get_project(project_id):
+            raise HTTPException(status_code=404, detail="project not found")
+        db.rename_project(project_id, payload.name.strip() or "Untitled")
+        return db.get_project(project_id)
+
+    return await asyncio.to_thread(_run)
+
+
+@app.put("/api/projects/{project_id}/config")
+async def put_project_config(project_id: str, payload: schemas.ProjectConfig) -> dict:
+    def _run() -> dict:
+        if not db.get_project(project_id):
+            raise HTTPException(status_code=404, detail="project not found")
+        db.update_project_config(project_id, payload.config)
+        return db.get_project(project_id)
+
+    return await asyncio.to_thread(_run)
+
+
+@app.post("/api/projects/{project_id}/activate")
+async def activate_project(project_id: str) -> dict:
+    def _run() -> dict:
+        proj = db.get_project(project_id)
+        if not proj:
+            raise HTTPException(status_code=404, detail="project not found")
+        db.set_active_project_id(project_id)
+        db.touch_project(project_id)
+        _TRACK_PATH_CACHE.clear()  # track ids are per-project; drop stale entries
+        return db.get_project(project_id)
+
+    return await asyncio.to_thread(_run)
+
+
+@app.delete("/api/projects/{project_id}")
+async def delete_project(project_id: str) -> dict:
+    def _run() -> dict:
+        proj = db.get_project(project_id)
+        if not proj:
+            raise HTTPException(status_code=404, detail="project not found")
+        slug = proj.get("slug") or ""
+        if slug:
+            shutil.rmtree(IMPORTS_DIR / slug, ignore_errors=True)
+            shutil.rmtree(EXPORTS_DIR / slug, ignore_errors=True)
+        db.delete_project(project_id)
+        if db.get_active_project_id() == project_id:
+            remaining = db.list_projects()
+            if remaining:
+                db.set_active_project_id(remaining[0]["id"])
+            else:
+                db.set_app_state("active_project_id", "")
+        _TRACK_PATH_CACHE.clear()
+        return {"deleted": project_id}
+
+    return await asyncio.to_thread(_run)
+
+
 @app.get("/api/mixes")
 async def list_mixes() -> list[dict]:
     """All rendered automix videos, newest first."""
 
     def _run() -> list[dict]:
         out = []
-        # Renders now live in per-title folders (exports/<title>/automix_*.mp4);
-        # rglob also picks up any legacy loose files. One entry per full mix —
+        # Renders for the active project live directly in exports/<slug>/ as
+        # automix_*.mp4 (+ _short.mp4 + .verify.json). One entry per full mix —
         # the Short is folded in as short_path, not listed separately.
-        all_mp4 = list(EXPORTS_DIR.rglob("automix_*.mp4"))
+        all_mp4 = list(active_exports_dir().rglob("automix_*.mp4"))
         fulls = [p for p in all_mp4 if not p.name.endswith("_short.mp4")]
         full_set = set(fulls)
         # Short-only renders leave just a *_short.mp4 with no full video; list
@@ -1231,9 +1371,9 @@ def _safe_video_file(filename: str, prefix: str | None = None) -> Path:
         raise HTTPException(status_code=400, detail="invalid filename")
     if prefix and not name.startswith(prefix):
         raise HTTPException(status_code=400, detail="not a rendered mix")
-    # Renders live in per-title subfolders, so search recursively by basename
-    # (timestamped, so unique). Falls back to the flat exports/ for legacy files.
-    p = next((q for q in EXPORTS_DIR.rglob(name) if q.is_file()), None)
+    # Renders live directly in the active project's exports/<slug>/; search by
+    # basename (timestamped, so unique).
+    p = next((q for q in active_exports_dir().rglob(name) if q.is_file()), None)
     if p is None:
         raise HTTPException(status_code=404, detail="file not found")
     return p
@@ -1244,13 +1384,10 @@ async def delete_mix(filename: str) -> dict:
     p = _safe_video_file(filename, prefix="automix_")
 
     def _remove() -> None:
-        # New layout: the mix has its own folder (full + Short + report) — drop
-        # the whole folder. Legacy layout: loose files — remove the trio.
-        if p.parent != EXPORTS_DIR:
-            shutil.rmtree(p.parent, ignore_errors=True)
-        else:
-            for f in (p, p.with_name(f"{p.stem}_short.mp4"), p.with_suffix(".verify.json")):
-                f.unlink(missing_ok=True)
+        # Mixes share the project export folder, so remove just this mix's trio
+        # (full + Short + verification report), never the folder itself.
+        for f in (p, p.with_name(f"{p.stem}_short.mp4"), p.with_suffix(".verify.json")):
+            f.unlink(missing_ok=True)
 
     await asyncio.to_thread(_remove)
     return {"deleted": filename}

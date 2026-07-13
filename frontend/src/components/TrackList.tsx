@@ -1031,7 +1031,17 @@ export function TrackList({
                                 </ul>
                               </li>
                             ) : (
-                              g.items.map((p) => renderRow(p, true))
+                              // Untitled (single-song) track: still float the
+                              // main drop to the top, then alts by confidence.
+                              [...g.items]
+                                .sort(
+                                  (a, b) =>
+                                    (b.d.primary ? 1 : 0) -
+                                      (a.d.primary ? 1 : 0) ||
+                                    (b.d.confidence ?? 0) -
+                                      (a.d.confidence ?? 0),
+                                )
+                                .map((p) => renderRow(p, true))
                             ),
                           )
                         })()}

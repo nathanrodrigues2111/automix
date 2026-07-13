@@ -113,11 +113,26 @@ def _launch() -> None:
     app = _build_app()
     port = _stable_port()
 
+    # If uvicorn throws inside the daemon thread (missing bundled module,
+    # lifespan/startup crash, bad bind), the exception would die silently and
+    # the main thread would only ever see the generic "did not come up" timeout
+    # below. Stash the real traceback so it can be surfaced instead.
+    serve_error: list[str] = []
+
     def serve() -> None:
-        uvicorn.run(app, host="127.0.0.1", port=port, log_level="warning")
+        try:
+            uvicorn.run(app, host="127.0.0.1", port=port, log_level="warning")
+        except BaseException:
+            import traceback
+
+            serve_error.append(traceback.format_exc())
 
     threading.Thread(target=serve, daemon=True).start()
     if not _wait_until_up(port):
+        if serve_error:
+            raise RuntimeError(
+                "backend crashed on startup:\n" + serve_error[0]
+            )
         raise RuntimeError("backend did not come up on 127.0.0.1")
 
     url = f"http://127.0.0.1:{port}"

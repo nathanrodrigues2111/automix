@@ -72,9 +72,8 @@ exe = EXE(
     name="Automix",
     # Windowed build: no console. Startup crashes are still captured to
     # ~/Automix/startup-error.log + a Windows message box (see app.py).
-    # NOTE: temporarily True for a local debug build (see backend startup
-    # traceback in the terminal); flip back to False before a real release.
-    console=True,
+    # Set to True only for local debug builds (backend traceback in terminal).
+    console=False,
     disable_windowed_traceback=False,
     icon=str(ROOT / "packaging" / "icon.ico") if (ROOT / "packaging" / "icon.ico").exists() else None,
 )

@@ -101,7 +101,7 @@ const DEFAULT_CONFIG: Omit<RenderConfig, "clips"> = {
   brand_overlay: true, // EDMPAPA black bars + logo
   video_cut_fade: true, // quick 0.25s blend on each video cut
   show_titles: true, // per-track title overlay
-  title_font: "Cubano", // burned-in title font for the full video (see Settings)
+  title_font: "BebasNeue-Regular", // full-video title font (Short uses short_font / Cubano)
   outro_s: 10, // black outro reserved for YouTube end screens
   resolution: "1080p", // final render canvas
   filename_style: "file", // exports named after the source video + date/time

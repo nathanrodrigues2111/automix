@@ -679,6 +679,55 @@ async def short_preview(req: dict) -> Response:
     return Response(content=png, media_type="image/png")
 
 
+def _maybe_fetch_youtube_cues(
+    fh: str,
+    cached: dict,
+    path: Path,
+    progress: "ProgressCb" = None,
+    pct: float = 0.0,
+    title: str = "",
+) -> None:
+    """For DJ sets, pull the tracklist (YouTube chapters, else timestamped
+    description) ONCE and label the detected drops with the song titles.
+
+    Attempted a single time per track: once the fetch call completes we set
+    `cues_tried` so we never re-hit YouTube on every automix. A network error
+    leaves the flag unset so an offline import auto-retries later; the manual
+    "Fetch from YouTube" button ignores the flag and always re-fetches."""
+    if cached.get("cues") or cached.get("cues_tried"):
+        return
+    meta = db.get_track_meta(fh) or {}
+    vid = meta.get("video_id")
+    if not vid:
+        return
+    try:
+        dur_s = float(analysis_mod.probe_basic(path).get("duration_s") or 0.0)
+    except Exception:
+        dur_s = 0.0
+    if dur_s < 480.0:  # short single, not a set — no tracklist to pull
+        return
+    try:
+        cues = youtube_mod.fetch_cues_from_youtube(str(vid))
+    except Exception:
+        return  # offline / transient — leave unmarked so automix retries
+    cached["cues_tried"] = True  # completed an attempt; don't re-hit YouTube
+    if cues:
+        wav = analysis_mod.WAV_CACHE_DIR / f"{fh}.wav"
+        cached["drops"] = analysis_mod.apply_cues(
+            cached.get("drops") or [], cues,
+            wav_path=wav if wav.exists() else None,
+            bpm=float(cached.get("bpm", 0.0)),
+            downbeats=[float(x) for x in (cached.get("downbeats") or [])],
+        )
+        cached["cues"] = cues
+        if progress and title:
+            progress(
+                "analysis", pct,
+                f"Labeled {sum(1 for d in cached['drops'] if d.get('title'))} drops from tracklist: {title}",
+            )
+    db.put_analysis(fh, cached)
+
+
 def _analyze_imported(
     results: list[dict],
     progress: "ProgressCb",
@@ -697,23 +746,32 @@ def _analyze_imported(
         if not path.exists():
             continue
         fh = analysis_mod.file_hash(path)
-        if db.get_analysis(fh):
-            analyzed += 1
-            continue
         title = r.get("title") or path.stem
         base = 50.0 + i / n * 50.0
         span = 50.0 / n
 
-        def sub(stage: str, pct: float, m: str = "", _b=base, _s=span, _t=title) -> None:
-            progress("analysis", min(99.0, _b + pct / 100.0 * _s), f"Analyzing {_t}")
-
-        try:
-            cached = analysis_mod.analyze_track(path, sub)
-            db.put_analysis(fh, cached)
+        cached = db.get_analysis(fh)
+        if cached is not None:
             analyzed += 1
+        else:
+            def sub(stage: str, pct: float, m: str = "", _b=base, _s=span, _t=title) -> None:
+                progress("analysis", min(99.0, _b + pct / 100.0 * _s), f"Analyzing {_t}")
+
+            try:
+                cached = analysis_mod.analyze_track(path, sub)
+                db.put_analysis(fh, cached)
+                analyzed += 1
+            except Exception:
+                # A bad track must not abort analysis of the rest.
+                continue
+        # Pull the YouTube tracklist once for DJ sets so drops are labeled
+        # automatically — no manual "Fetch from YouTube" press needed.
+        try:
+            _maybe_fetch_youtube_cues(
+                fh, cached, path, progress, min(99.0, base + span), title
+            )
         except Exception:
-            # A bad track must not abort analysis of the rest.
-            continue
+            pass
     return analyzed
 
 
@@ -926,34 +984,15 @@ def _automix_pipeline(req: schemas.AutomixRequest, progress, cancel=None) -> dic
                 # One bad track must not kill the whole automix.
                 continue
         # DJ sets: pull the tracklist (YouTube chapters) automatically so
-        # every drop carries the right song title. One best drop per cue
-        # segment — that's the "right amount" for a drops-only mix of a set.
-        if cached is not None and not cached.get("cues"):
-            meta = db.get_track_meta(fh) or {}
-            vid = meta.get("video_id")
+        # every drop carries the right song title. Normally already fetched at
+        # import; this covers tracks imported before that and offline retries.
+        if cached is not None:
             try:
-                dur_s = float(analysis_mod.probe_basic(path).get("duration_s") or 0.0)
+                _maybe_fetch_youtube_cues(
+                    fh, cached, path, progress, 30.0 + (i + 1) / n * 40.0, title
+                )
             except Exception:
-                dur_s = 0.0
-            if vid and dur_s >= 480.0:
-                try:
-                    cues = youtube_mod.fetch_cues_from_youtube(str(vid))
-                    if cues:
-                        wav = analysis_mod.WAV_CACHE_DIR / f"{fh}.wav"
-                        cached["drops"] = analysis_mod.apply_cues(
-                            cached.get("drops") or [], cues,
-                            wav_path=wav if wav.exists() else None,
-                            bpm=float(cached.get("bpm", 0.0)),
-                            downbeats=[float(x) for x in (cached.get("downbeats") or [])],
-                        )
-                        cached["cues"] = cues
-                        db.put_analysis(fh, cached)
-                        progress(
-                            "analysis", 30.0 + (i + 1) / n * 40.0,
-                            f"Labeled {sum(1 for d in cached['drops'] if d.get('title'))} drops from tracklist: {title}",
-                        )
-                except Exception:
-                    pass  # offline / no chapters — titles fall back to track title
+                pass  # offline / no chapters — titles fall back to track title
         entries.append((fh, cached))
     progress("analysis", 70.0, f"Analysis ready for {len(entries)}/{n} tracks")
 

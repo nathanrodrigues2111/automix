@@ -20,6 +20,7 @@ export const CHANGELOG: ChangelogEntry[] = [
       "Fixed rendering on Windows, where the title and branding step could fail and stop the whole render",
       "Auto-Mix is now Beta and the Auto-Mix button is hidden by default. Turn on Enable Auto-Mix button in Settings > Interface to show it; otherwise a playlist just feeds Import and Choose",
       "Imported tracks are now analyzed automatically, so they are ready to mix the moment the import finishes",
+      "For DJ sets, the tracklist is now pulled from YouTube automatically on import (chapters, or timestamps in the description) so drops are labeled with the right song titles without pressing Fetch from YouTube",
       "The EDMPAPA intro now plays even without the large source file: a lightweight intro ships with the app and is used as a fallback (this also brings the intro to the packaged builds)",
       "New Short overlay setting: turn it off for a clean full-width Short with no EDMPAPA template, the track titles still burned in",
       "Add a custom Short title: a bold boxed caption (TikTok/CapCut style) burned near the top of the Short, set in Settings > Output",

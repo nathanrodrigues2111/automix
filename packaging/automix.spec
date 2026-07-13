@@ -70,9 +70,9 @@ exe = EXE(
     [],
     exclude_binaries=True,
     name="Automix",
-    # Temporarily console=True so a startup crash prints a traceback instead of
-    # dying silently. Flip back to False once the app launches cleanly.
-    console=True,
+    # Windowed build: no console. Startup crashes are still captured to
+    # ~/Automix/startup-error.log + a Windows message box (see app.py).
+    console=False,
     disable_windowed_traceback=False,
     icon=str(ROOT / "packaging" / "icon.ico") if (ROOT / "packaging" / "icon.ico").exists() else None,
 )

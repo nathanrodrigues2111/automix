@@ -124,7 +124,20 @@ def _launch() -> None:
     try:
         import webview  # pywebview
 
-        webview.create_window("Automix", url, width=1360, height=900, min_size=(1024, 680))
+        # Support both fullscreen and windowed. Default is windowed; set
+        # AUTOMIX_FULLSCREEN=1 (or true/yes/on) to launch the same build
+        # borderless full screen.
+        fullscreen = os.environ.get("AUTOMIX_FULLSCREEN", "").strip().lower() in (
+            "1", "true", "yes", "on",
+        )
+        webview.create_window(
+            "Automix",
+            url,
+            width=1360,
+            height=900,
+            min_size=(1024, 680),
+            fullscreen=fullscreen,
+        )
         webview.start()
     except Exception as e:
         # No native webview available: fall back to the default browser and

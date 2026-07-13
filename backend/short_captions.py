@@ -88,7 +88,7 @@ def render_caption(
     box_h = line_h + 2 * pady
     img = Image.new("RGBA", (box_w, box_h), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
-    d.rounded_rectangle([0, 0, box_w - 1, box_h - 1], radius=int(box_h * 0.46),
+    d.rounded_rectangle([0, 0, box_w - 1, box_h - 1], radius=int(box_h * 0.28),
                         fill=(255, 255, 255, 255))
 
     x = padx

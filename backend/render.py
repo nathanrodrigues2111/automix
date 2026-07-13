@@ -1033,6 +1033,7 @@ def _render_short(
     short_title: str = "",
     max_content_s: float = _SHORT_MAX_CONTENT_S,
     end_card: bool = False,
+    first_drop_s: float = 0.0,
 ) -> Path | None:
     """Vertical Short reframing the rendered mix itself: the first minute of
     the beat-matched mix (as many drops as fit).
@@ -1119,21 +1120,29 @@ def _render_short(
         for i, ln in enumerate(hlines):
             _add_cap(ln, h_fs, 300 + i * gap, 0.0, card_start)
 
-    # Per-drop track name (bottom); artist (top) only without a custom heading.
-    top_y = _SHORT_WIN_TOP + _SHORT_BAR_H // 2
+    # Per-drop artist + track name, stacked near the bottom (safe zone). They
+    # pop in ON THE DROP (the kick), not during the lead-in.
     bot_y = min(_SHORT_WIN_BOT - _SHORT_BAR_H // 2, _SHORT_VID_Y + _SHORT_VID_H + 96)
     for title, s, e in windows:
         if s >= card_start:
             continue
         e = min(e, card_start)
+        drop_s = max(s, first_drop_s)
+        if drop_s >= e:  # lead-in longer than the window; keep the whole window
+            drop_s = s
         artist, track = (title.split(" - ", 1) if " - " in title else ("", title))
+        artist, track = artist.strip(), track.strip()
         try:
             t_fs = short_captions.fit_font_size(track, font_path, _SHORT_W - 150, base=90)
         except Exception:
             t_fs = 80
-        if not short_title.strip() and artist.strip():
-            _add_cap(artist, min(t_fs, 84), top_y, s, e)
-        _add_cap(track, t_fs, bot_y, s, e)
+        if artist:
+            try:
+                a_fs = short_captions.fit_font_size(artist, font_path, _SHORT_W - 170, base=min(t_fs, 72))
+            except Exception:
+                a_fs = min(t_fs, 68)
+            _add_cap(artist, a_fs, bot_y - int(t_fs * 1.7), drop_s, e)
+        _add_cap(track, t_fs, bot_y, drop_s, e)
 
     if end_card:
         words = _SHORT_END_CARD_TEXT.split()
@@ -2155,6 +2164,7 @@ def render_mix(
             "_lens": _lens,
             "_crossfade_durations": [float(c) for c in crossfade_durations],
             "_seam_infos": seam_infos,
+            "_first_kick": first_kick_out,
             "_titles": [
                 (clips[i].get("title") or _display_title(srcs[i]))
                 for i in range(len(srcs))
@@ -2369,6 +2379,7 @@ def render_mix(
                 s_cf = res["_crossfade_durations"]
                 s_seam = res["_seam_infos"]
                 s_titles = res["_titles"]
+                s_first_kick = float(res.get("_first_kick", 0.0))
             else:
                 s_lens = [
                     sf.info(str(p)).frames / sf.info(str(p)).samplerate
@@ -2380,6 +2391,7 @@ def render_mix(
                     (clips[i].get("title") or _display_title(srcs[i]))
                     for i in range(len(srcs))
                 ]
+                s_first_kick = first_kick_out
 
             mix_len = sum(s_lens) - sum(s_cf)
             spans = compute_title_windows(
@@ -2399,6 +2411,7 @@ def render_mix(
                 short_title=str(config.get("short_title") or ""),
                 max_content_s=float(config.get("short_max_s", 0.0) or 0.0),
                 end_card=bool(config.get("short_end_card", False)),
+                first_drop_s=s_first_kick,
             )
             if short_path is not None:
                 record["short_path"] = "videos/" + short_path.relative_to(VIDEOS_DIR).as_posix()

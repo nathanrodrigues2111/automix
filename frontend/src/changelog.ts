@@ -26,7 +26,7 @@ export const CHANGELOG: ChangelogEntry[] = [
       "Short captions now have rounded boxes and full-color emoji (type an emoji in the Short title and it shows in color)",
       "The Short video now zooms to fill the whole vertical frame (aspect kept, edges cropped) instead of leaving black bars",
       "New Short end card toggle (the 'watch the full video' card) in Settings, off by default",
-      "The track name now shows in the same bold boxed style at the bottom of the Short, moved up so it stays clear of the YouTube Shorts buttons and caption",
+      "The Short's artist and track name show together (stacked) at the bottom and pop in on the drop, clear of the YouTube Shorts buttons and caption",
       "New Short length setting (5 to 15 seconds, or full) to keep the teaser punchy, and a separate Short font (Cubano by default) so Shorts can look different from the full video",
       "New option to render only the Short and skip the full video, for quick vertical clips (also available right in the Render dialog)",
       "Settings are reorganized: a dedicated Shorts section, and a new Debug section with a reset-to-defaults button and a shortcut to the developer console",

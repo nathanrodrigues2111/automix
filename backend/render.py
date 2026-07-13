@@ -1130,18 +1130,22 @@ def _render_short(
             drop_s = s
         artist, track = (title.split(" - ", 1) if " - " in title else ("", title))
         artist, track = artist.strip(), track.strip()
-        try:
-            t_fs = short_captions.fit_font_size(track, font_path, 840, base=90)
-        except Exception:
-            t_fs = 80
         block: list[tuple[str, int]] = []
-        if artist and show_artist:  # track name only by default — full titles run too long
+        # Wrap long titles into multiple lines (like the heading) instead of
+        # one line that overflows the frame. fit toward ~2 lines, then wrap.
+        try:
+            t_fs = short_captions.fit_font_size(track, font_path, 1680, base=84, min_fs=54)
+        except Exception:
+            t_fs = 72
+        if artist and show_artist:
             try:
-                a_fs = short_captions.fit_font_size(artist, font_path, 820, base=min(t_fs, 74))
+                a_fs = short_captions.fit_font_size(artist, font_path, 820, base=min(t_fs, 68))
+                for ln in short_captions.wrap_text(artist, a_fs, font_path, 820):
+                    block.append((ln, a_fs))
             except Exception:
-                a_fs = min(t_fs, 68)
-            block.append((artist, a_fs))
-        block.append((track, t_fs))
+                block.append((artist, min(t_fs, 64)))
+        for ln in short_captions.wrap_text(track, t_fs, font_path, 820):
+            block.append((ln, t_fs))
         _add_block(block, bot_cy, drop_s, e)
 
     if end_card:

@@ -111,7 +111,7 @@ def render_block(
     padx = radius + int(max_fs * 0.14)
     pady = int(max_fs * 0.26)
     merge = radius + int(max_fs * 0.16)  # vertical overlap between line boxes
-    blur = max(3, int(max_fs * 0.34))
+    blur = max(3, int(max_fs * 0.24))  # smaller blur = less rounded corners
     m = blur * 3  # margin so the rounding never clips at the canvas edge
     cap = (max_width - 2 * m) if max_width else 10 ** 9
 

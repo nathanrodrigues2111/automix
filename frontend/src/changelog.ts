@@ -9,6 +9,15 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "0.13.1",
+    date: "2026-07-13",
+    title: "Startup problems are visible now",
+    items: [
+      "If the desktop app fails to start, it now tells you what went wrong: a message box appears on Windows and the details are saved to Automix/startup-error.log in your home folder, instead of the app silently never opening",
+      "New scripts to build the Windows app locally on your own machine (build-windows.bat one-click launcher), without waiting for a cloud build",
+    ],
+  },
+  {
     version: "0.13.0",
     date: "2026-07-13",
     title: "Projects are now full workspaces",

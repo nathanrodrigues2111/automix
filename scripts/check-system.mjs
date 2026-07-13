@@ -84,9 +84,13 @@ const HINTS = {
 };
 
 function hint(tool) {
+  // ffprobe ships inside the ffmpeg package everywhere.
+  if (tool === "ffprobe") tool = "ffmpeg";
   const table = HINTS[OS];
-  if (table && table[tool]) return `  ${table[tool]}`;
-  return `  install '${tool}' via your platform's package manager`;
+  let base = table && table[tool] ? `  ${table[tool]}` : `  install '${tool}' via your platform's package manager`;
+  // Volta is this project's preferred Node manager (cross-platform).
+  if (tool === "node") base += "\n  (preferred: install Volta from https://volta.sh, then `volta install node@20`)";
+  return base;
 }
 
 function pad(label, width = 14) {
@@ -98,6 +102,18 @@ function check(label, cmd) {
     console.log(`${bad} ${pad(label)} ${dim("not found")}`);
     console.log(hint(label));
     missing++;
+    return;
+  }
+  const v = version(cmd) || "";
+  console.log(`${ok} ${pad(label)} ${dim(v)}`);
+}
+
+// Optional tool: report presence but never count it as a missing requirement.
+function checkOptional(label, cmd, note) {
+  const mark = c(33, "○");
+  if (!which(cmd)) {
+    console.log(`${mark} ${pad(label)} ${dim("not found (optional)")}`);
+    if (note) console.log(dim(`  ${note}`));
     return;
   }
   const v = version(cmd) || "";
@@ -123,9 +139,17 @@ function checkNode() {
 }
 
 function checkPython() {
+  // The backend runs from its own venv, and `uv` can create that venv with a
+  // supported, managed Python even when the system Python is too new (3.13+)
+  // or absent. So if uv is present, the Python requirement is satisfied.
+  if (which("uv")) {
+    console.log(`${ok} ${pad("python")} ${dim("provided by uv (creates the backend venv)")}`);
+    return;
+  }
+  // No uv: fall back to a system interpreter. Backend requires >=3.10 (any).
   const candidates = isWin
-    ? [["py", ["-3.11"]], ["py", ["-3.12"]], ["py", ["-3.13"]], ["py", ["-3"]], ["python", []]]
-    : [["python3.11", []], ["python3.12", []], ["python3.13", []], ["python3", []]];
+    ? [["py", ["-3.14"]], ["py", ["-3.13"]], ["py", ["-3.12"]], ["py", ["-3.11"]], ["py", ["-3.10"]], ["py", ["-3"]], ["python", []]]
+    : [["python3.14", []], ["python3.13", []], ["python3.12", []], ["python3.11", []], ["python3.10", []], ["python3", []]];
   for (const [bin, prefix] of candidates) {
     if (!which(bin)) continue;
     const res = spawnSync(
@@ -136,24 +160,27 @@ function checkPython() {
     if (res.status !== 0) continue;
     const v = res.stdout.trim();
     const [maj, min] = v.split(".").map(Number);
-    if (maj >= 3 && min >= 11) {
+    if (maj === 3 && min >= 10) {
       const display = `${bin}${prefix.length ? " " + prefix.join(" ") : ""}`;
-      console.log(`${ok} ${pad("python>=3.11")} ${dim(`${v} (${display})`)}`);
+      console.log(`${ok} ${pad("python>=3.10")} ${dim(`${v} (${display})`)}`);
       return;
     }
   }
-  console.log(`${bad} ${pad("python>=3.11")} ${dim("need python 3.11+")}`);
+  console.log(`${bad} ${pad("python>=3.10")} ${dim("need Python 3.10+, or install uv")}`);
   console.log(hint("python"));
   missing++;
 }
 
 console.log(`automix — system check (OS: ${OS})`);
 console.log("--------------------------------");
-check("ffmpeg", "ffmpeg");
-check("rubberband", "rubberband");
+checkOptional("uv", "uv", "recommended Python manager — see scripts/setup.* or https://docs.astral.sh/uv/");
 checkPython();
 checkNode();
 check("npm", "npm");
+check("ffmpeg", "ffmpeg");
+check("ffprobe", "ffprobe");
+checkOptional("yt-dlp", "yt-dlp", "needed for YouTube import; bundled in the backend venv (global copy: uv tool install yt-dlp)");
+checkOptional("rubberband", "rubberband", "only for BPM stretch / pitch-shift modes; default drops-only mode doesn't use it");
 console.log("--------------------------------");
 if (missing === 0) {
   console.log(`${ok} All required tools present.`);

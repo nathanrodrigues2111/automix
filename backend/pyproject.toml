@@ -2,12 +2,15 @@
 name = "automix-backend"
 version = "0.1.0"
 description = "Local-only EDM auto-mixer backend"
-requires-python = ">=3.10,<3.13"
+requires-python = ">=3.10"
 dependencies = [
     "fastapi>=0.115",
     "uvicorn[standard]>=0.30",
     "pydantic>=2.7",
-    "numpy>=1.26,<2.0",
+    # numpy 2.x is required for Python 3.13+ wheels (1.26 has none); it also
+    # works on 3.10-3.12, so the range is left open. The optional [ml] extra
+    # may pull numpy back to 1.26 on older Pythons if torch/demucs demand it.
+    "numpy>=1.26",
     "scipy>=1.11",
     "soundfile>=0.12",
     "librosa>=0.10",

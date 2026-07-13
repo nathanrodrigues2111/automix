@@ -13,20 +13,27 @@ function tryRun(cmd, args) {
   return res.status === 0;
 }
 
+const FALLBACK_PY = "3.12"; // fetched by uv only when no suitable Python is installed
+
 function findPython() {
-  // Prefer 3.11 / 3.12 / 3.13 in that order; accept any 3.11+ as a final fallback.
+  // Backend supports any Python >=3.10 (numpy 2.x provides wheels for 3.13/3.14).
+  // Prefer the newest installed interpreter so the user's own Python is used.
   const candidates = isWin
     ? [
-        ["py", ["-3.11"]],
-        ["py", ["-3.12"]],
+        ["py", ["-3.14"]],
         ["py", ["-3.13"]],
+        ["py", ["-3.12"]],
+        ["py", ["-3.11"]],
+        ["py", ["-3.10"]],
         ["py", ["-3"]],
         ["python", []],
       ]
     : [
-        ["python3.11", []],
-        ["python3.12", []],
+        ["python3.14", []],
         ["python3.13", []],
+        ["python3.12", []],
+        ["python3.11", []],
+        ["python3.10", []],
         ["python3", []],
       ];
   for (const [bin, prefix] of candidates) {
@@ -38,7 +45,7 @@ function findPython() {
     );
     if (res.status !== 0) continue;
     const [maj, min] = res.stdout.trim().split(".").map(Number);
-    if (maj >= 3 && min >= 11) return { bin, prefix };
+    if (maj === 3 && min >= 10) return { bin, prefix, version: `${maj}.${min}` };
   }
   return null;
 }
@@ -64,12 +71,18 @@ const hasUv = tryRun("uv", ["--version"]);
 if (!existsSync(venvDir)) {
   console.log(">>> Creating backend/.venv");
   if (hasUv) {
-    run("uv", ["venv", ".venv", "--seed"], { cwd: backendDir });
+    // Use the newest installed Python >=3.10 (so the user's own Python is used);
+    // if none is present, uv fetches a known-good version. Passing an explicit
+    // version avoids uv silently grabbing an unsupported (<3.10) interpreter.
+    const py = findPython();
+    const pyArg = py ? py.version : FALLBACK_PY;
+    console.log(`>>> Using Python ${pyArg}${py ? "" : " (fetched by uv)"}`);
+    run("uv", ["venv", ".venv", "--python", pyArg, "--seed"], { cwd: backendDir });
   } else {
     const py = findPython();
     if (!py) {
       console.error(
-        "No Python 3.11+ found on PATH (and no 'uv'). Install uv (https://docs.astral.sh/uv/) or Python 3.11+, then re-run."
+        "No Python 3.10+ found on PATH (and no 'uv'). Install uv (https://docs.astral.sh/uv/) or Python 3.10+, then re-run."
       );
       process.exit(1);
     }
@@ -97,7 +110,9 @@ if (pipCheck.status !== 0) {
 console.log(">>> Upgrading pip");
 run(venvPython, ["-m", "pip", "install", "--upgrade", "pip"]);
 
-console.log(">>> Installing backend (editable)");
-run(venvPython, ["-m", "pip", "install", "-e", "."], { cwd: backendDir });
+console.log(">>> Installing backend (editable, with dev deps)");
+// [dev] pulls in pytest/httpx so `npm test` works out of the box. The heavy
+// neural [ml] extra stays opt-in (`pip install -e backend[ml]`).
+run(venvPython, ["-m", "pip", "install", "-e", ".[dev]"], { cwd: backendDir });
 
 console.log(">>> Backend install complete.");

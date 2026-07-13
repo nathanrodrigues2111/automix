@@ -72,7 +72,7 @@ Run `npm run check-system` on any OS to verify every dependency is on `PATH`.
 ## Prerequisites
 
 - **Node 20+**
-- **Python 3.11+** (or [`uv`](https://docs.astral.sh/uv/) — preferred; the installer uses it automatically when present)
+- **Python 3.10–3.14** (or [`uv`](https://docs.astral.sh/uv/) — preferred; the installer uses it automatically when present)
 - **`ffmpeg` / `ffprobe`** on `PATH` (a [static build](https://johnvansickle.com/ffmpeg/) works fine; no `drawtext` required — titles burn via libass)
 - **`yt-dlp`** on `PATH` (for YouTube import)
 - *Optional:* `rubberband-cli` — only for BPM time-stretch / pitch-shift modes (the default drops-only mode doesn't use it)
@@ -80,9 +80,21 @@ Run `npm run check-system` on any OS to verify every dependency is on `PATH`.
 
 ## Quick start
 
+**One-command bootstrap** (installs uv, Python 3.12, Node via Volta, ffmpeg,
+yt-dlp, and every project dependency — see [`SETUP.md`](SETUP.md) for details):
+
+```bash
+./scripts/setup.sh                                             # Linux / macOS
+powershell -ExecutionPolicy Bypass -File scripts\setup.ps1     # Windows
+# or, if you already have Node:
+npm run setup
+```
+
+Or install the pieces yourself:
+
 ```bash
 npm install            # root dev tools (concurrently, rimraf)
-npm run install:all    # creates backend/.venv + Python deps, installs frontend node_modules
+npm run install:all    # creates backend/.venv (Python 3.10-3.14 via uv) + deps, installs frontend node_modules
 npm run dev            # starts FastAPI (:8000) and Vite (:5173) in parallel
 ```
 

@@ -49,8 +49,8 @@ interface SettingsDialogProps {
   setConfig: (config: Omit<RenderConfig, "clips">) => void
   loopPreviews: boolean
   onLoopPreviewsChange: (v: boolean) => void
-  hideAutomixButton: boolean
-  onHideAutomixButtonChange: (v: boolean) => void
+  automixEnabled: boolean
+  onAutomixEnabledChange: (v: boolean) => void
   /** BPMs of the clips currently in the mix, in order — used by the
    *  "first"/"median" target-BPM modes. */
   clipBpms: number[]
@@ -64,8 +64,8 @@ export function SettingsDialog({
   setConfig,
   loopPreviews,
   onLoopPreviewsChange,
-  hideAutomixButton,
-  onHideAutomixButtonChange,
+  automixEnabled,
+  onAutomixEnabledChange,
   clipBpms,
   onStartTour,
 }: SettingsDialogProps) {
@@ -644,10 +644,11 @@ export function SettingsDialog({
           <section className="space-y-3 pb-2">
             <SectionLabel>Interface</SectionLabel>
             <SwitchRow
-              title="Hide Auto-Mix button"
-              description="Remove the Auto-Mix button so a playlist only feeds Import and Choose"
-              checked={hideAutomixButton}
-              onChange={onHideAutomixButtonChange}
+              title="Enable Auto-Mix button"
+              description="Show the Auto-Mix button on the playlist bar. Off keeps it hidden so a playlist only feeds Import and Choose"
+              checked={automixEnabled}
+              onChange={onAutomixEnabledChange}
+              badge="Beta"
             />
           </section>
           <Separator className="bg-border/50" />
@@ -882,16 +883,26 @@ function SwitchRow({
   description,
   checked,
   onChange,
+  badge,
 }: {
   title: string
   description: string
   checked: boolean
   onChange: (v: boolean) => void
+  /** Optional small pill after the title, e.g. "Beta". */
+  badge?: string
 }) {
   return (
     <label className="flex cursor-pointer items-center justify-between gap-4 rounded-lg border border-border bg-card px-4 py-3 transition-colors hover:bg-accent/20">
       <span className="min-w-0 space-y-0.5">
-        <span className="block text-sm font-medium">{title}</span>
+        <span className="flex items-center gap-1.5 text-sm font-medium">
+          {title}
+          {badge && (
+            <span className="rounded bg-primary/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase leading-none tracking-wide text-primary">
+              {badge}
+            </span>
+          )}
+        </span>
         <span className="block text-xs leading-relaxed text-muted-foreground">
           {description}
         </span>

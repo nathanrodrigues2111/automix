@@ -189,7 +189,7 @@ const SETTINGS_KEY = "automix.settings.v4"
 interface StoredSettings {
   config?: Partial<Omit<RenderConfig, "clips">>
   loopPreviews?: boolean
-  hideAutomixButton?: boolean
+  automixEnabled?: boolean
 }
 
 function loadStoredSettings(): StoredSettings {
@@ -218,11 +218,11 @@ export default function App() {
   const [loopPreviews, setLoopPreviews] = useState<boolean>(
     () => loadStoredSettings().loopPreviews ?? true,
   )
-  // Optional: hide the Auto-Mix button so the playlist only feeds Import /
-  // Choose (hand-tuned workflow). Off by default — the button stays visible
-  // (it is marked Beta) until the user hides it in Settings.
-  const [hideAutomixButton, setHideAutomixButton] = useState<boolean>(
-    () => loadStoredSettings().hideAutomixButton ?? false,
+  // Auto-Mix is Beta: the button is HIDDEN by default and only appears once
+  // the user opts in via Settings > Interface. Default off = hidden, so a
+  // playlist feeds Import / Choose (the hand-tuned workflow) until enabled.
+  const [automixEnabled, setAutomixEnabled] = useState<boolean>(
+    () => loadStoredSettings().automixEnabled ?? false,
   )
 
   // Selected title font: load it into the document so the preview title
@@ -248,13 +248,13 @@ export default function App() {
         JSON.stringify({
           config,
           loopPreviews,
-          hideAutomixButton,
+          automixEnabled,
         } satisfies StoredSettings),
       )
     } catch {
       // storage unavailable — settings just won't persist
     }
-  }, [config, loopPreviews, hideAutomixButton])
+  }, [config, loopPreviews, automixEnabled])
 
   const [projectDialog, setProjectDialog] = useState<"save" | "load" | null>(
     null,
@@ -732,7 +732,7 @@ export default function App() {
           <AutomixPanel
             progress={progress}
             variant="header"
-            hideAutomixButton={hideAutomixButton}
+            automixEnabled={automixEnabled}
           />
         </div>
         <div className="flex shrink-0 items-center gap-1.5">
@@ -1075,8 +1075,8 @@ export default function App() {
         setConfig={setConfig}
         loopPreviews={loopPreviews}
         onLoopPreviewsChange={setLoopPreviews}
-        hideAutomixButton={hideAutomixButton}
-        onHideAutomixButtonChange={setHideAutomixButton}
+        automixEnabled={automixEnabled}
+        onAutomixEnabledChange={setAutomixEnabled}
         clipBpms={clipBpms}
         onStartTour={() => {
           setSettingsOpen(false)

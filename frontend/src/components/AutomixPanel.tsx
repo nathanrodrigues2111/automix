@@ -65,16 +65,16 @@ interface AutomixPanelProps {
   /** "card" renders the standalone panel; "header" renders a compact form
    *  row whose status (progress, log, result) floats in a dropdown below. */
   variant?: "card" | "header"
-  /** When true, hide the Auto-Mix action entirely (both the header button and
-   *  the one in the track chooser) — the playlist only feeds Import / Choose.
-   *  Off by default; toggled in Settings → Interface. */
-  hideAutomixButton?: boolean
+  /** Auto-Mix is Beta and hidden by default. When false (the default), the
+   *  Auto-Mix action is hidden everywhere (header button + track chooser) and
+   *  the playlist only feeds Import / Choose. Enabled in Settings → Interface. */
+  automixEnabled?: boolean
 }
 
 export function AutomixPanel({
   progress,
   variant = "card",
-  hideAutomixButton = false,
+  automixEnabled = false,
 }: AutomixPanelProps) {
   const compact = variant === "header"
   const qc = useQueryClient()
@@ -280,9 +280,9 @@ export function AutomixPanel({
           )}
           onSubmit={(e) => {
             e.preventDefault()
-            // With the Auto-Mix button hidden, Enter must not silently kick
-            // off a full render — the visible actions are Import / Choose.
-            if (hideAutomixButton) return
+            // With Auto-Mix disabled, Enter must not silently kick off a full
+            // render — the visible actions are Import / Choose.
+            if (!automixEnabled) return
             startAutomix()
           }}
         >
@@ -320,7 +320,7 @@ export function AutomixPanel({
                 compact && "h-8 w-16 text-sm",
               )}
             />
-            {!hideAutomixButton && (
+            {automixEnabled && (
               <Button
                 type="submit"
                 disabled={running}
@@ -336,9 +336,6 @@ export function AutomixPanel({
                   <Wand2 className="h-4 w-4" />
                 )}
                 Auto-Mix
-                <span className="ml-1 rounded bg-primary-foreground/20 px-1 py-0.5 text-[9px] font-semibold uppercase leading-none tracking-wide">
-                  Beta
-                </span>
               </Button>
             )}
             <Button
@@ -467,7 +464,7 @@ export function AutomixPanel({
             <Download className="h-3.5 w-3.5" /> Import{" "}
             {wholePlaylist ? "all" : selectedIds.size}
           </Button>
-          {!hideAutomixButton && (
+          {automixEnabled && (
             <Button
               size="sm"
               disabled={!wholePlaylist && selectedIds.size === 0}

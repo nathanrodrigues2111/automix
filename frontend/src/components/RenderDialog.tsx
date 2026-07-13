@@ -38,6 +38,7 @@ import {
   useTracks,
   mediaUrl,
 } from "@/api/client"
+import { apiUrl } from "@/lib/backend"
 import type { RenderConfig } from "@/api/types"
 import type { ProgressMap } from "@/hooks/useProgressSocket"
 
@@ -83,41 +84,33 @@ export function RenderDialog({
   const tracks = useTracks()
   const trackById = new Map((tracks.data ?? []).map((t) => [t.id, t]))
   const [playingClip, setPlayingClip] = useState<number | null>(null)
-  const [playFrac, setPlayFrac] = useState(0) // 0-1 playback progress of the playing clip
+  const [playFrac, setPlayFrac] = useState(0) // 0-1 progress over the drop clip
   const audioRef = useRef<HTMLAudioElement | null>(null)
-  const playStartRef = useRef(0)
 
-  const playClip = (i: number, trackId: string, startS: number) => {
+  const playClip = (i: number, trackId: string, startS: number, endS: number) => {
     const a = audioRef.current
-    const tr = trackById.get(trackId)
-    if (!a || !tr) return
+    if (!a || !trackById.has(trackId)) return
     if (playingClip === i) {
       a.pause()
       setPlayingClip(null)
       return
     }
-    playStartRef.current = Math.max(0, startS)
+    const start = Math.max(0, startS)
+    const end = endS > start ? endS : start + 15
     setPlayFrac(0)
-    a.src = mediaUrl(tr.path)
-    const onMeta = () => {
-      try {
-        a.currentTime = playStartRef.current
-      } catch {
-        /* seek may be unsupported until buffered */
-      }
-      void a.play().catch(() => {})
-    }
-    a.addEventListener("loadedmetadata", onMeta, { once: true })
-    a.load()
+    // Same source the track section / drop previews use: a short, loudness-
+    // normalized clip of JUST the drop (not the whole 5-minute track).
+    a.src = apiUrl(
+      `/api/tracks/${trackId}/clip?start=${start.toFixed(3)}&end=${end.toFixed(3)}`,
+    )
+    void a.play().catch(() => {})
     setPlayingClip(i)
   }
 
   const onAudioTime = () => {
     const a = audioRef.current
     if (!a || !a.duration || !isFinite(a.duration)) return
-    const s = playStartRef.current
-    const frac = (a.currentTime - s) / Math.max(0.1, a.duration - s)
-    setPlayFrac(Math.min(1, Math.max(0, frac)))
+    setPlayFrac(Math.min(1, Math.max(0, a.currentTime / a.duration)))
   }
 
   // Reset job state when the dialog closes so reopening starts fresh.
@@ -262,7 +255,14 @@ export function RenderDialog({
                               <button
                                 type="button"
                                 disabled={!tr}
-                                onClick={() => playClip(i, clip.track_id, clip.start_s ?? 0)}
+                                onClick={() =>
+                                  playClip(
+                                    i,
+                                    clip.track_id,
+                                    clip.kick_s ?? clip.start_s ?? 0,
+                                    clip.end_s ?? 0,
+                                  )
+                                }
                                 title={
                                   !tr
                                     ? "Source track not found"

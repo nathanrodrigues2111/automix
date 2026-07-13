@@ -187,6 +187,17 @@
   * {
     border-color: var(--border);
   }
+  /* Tailwind v4 Preflight drops the default cursor:pointer on buttons; restore
+     it for interactive elements (buttons, links, switches, checkboxes). */
+  button:not(:disabled),
+  [role="button"]:not([aria-disabled="true"]),
+  [role="switch"]:not([aria-disabled="true"]),
+  label:has(> input[type="checkbox"]),
+  a[href],
+  summary,
+  select:not(:disabled) {
+    cursor: pointer;
+  }
   body {
     background: var(--background);
     color: var(--foreground);

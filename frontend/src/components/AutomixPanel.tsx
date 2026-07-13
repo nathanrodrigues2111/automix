@@ -336,6 +336,9 @@ export function AutomixPanel({
                   <Wand2 className="h-4 w-4" />
                 )}
                 Auto-Mix
+                <span className="ml-1 rounded bg-primary-foreground/20 px-1 py-0.5 text-[9px] font-semibold uppercase leading-none tracking-wide">
+                  Beta
+                </span>
               </Button>
             )}
             <Button

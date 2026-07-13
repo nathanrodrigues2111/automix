@@ -219,7 +219,8 @@ export default function App() {
     () => loadStoredSettings().loopPreviews ?? true,
   )
   // Optional: hide the Auto-Mix button so the playlist only feeds Import /
-  // Choose (hand-tuned workflow). Off by default — the button stays visible.
+  // Choose (hand-tuned workflow). Off by default — the button stays visible
+  // (it is marked Beta) until the user hides it in Settings.
   const [hideAutomixButton, setHideAutomixButton] = useState<boolean>(
     () => loadStoredSettings().hideAutomixButton ?? false,
   )

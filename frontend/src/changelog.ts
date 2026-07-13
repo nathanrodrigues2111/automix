@@ -18,6 +18,7 @@ export const CHANGELOG: ChangelogEntry[] = [
       "Full video drop length and Short drop length are now separate settings, both editable in Settings > Mix",
       "Each mix in the Mixes panel now has Full video and Short tabs, so you can play and download either version right there",
       "Fixed rendering on Windows, where the title and branding step could fail and stop the whole render",
+      "Auto-Mix is now marked Beta while it is being tuned",
       "New option to hide the Auto-Mix button in Settings > Interface, for when you prefer the Import and Choose workflow",
       "The render window no longer runs off the screen when a mix finishes, it scrolls instead",
       "A few settings return to their defaults after this update",

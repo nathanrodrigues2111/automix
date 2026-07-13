@@ -46,23 +46,12 @@ def _emoji_image(ch: str, size: int, emoji_font: Path) -> Image.Image | None:
         return None
 
 
-def render_caption(
-    text: str,
-    font_path: Path,
-    fs: int,
-    out_png: Path,
-    emoji_font: Path | None = None,
-    max_width: int | None = None,
-) -> tuple[int, int]:
-    """Render one caption line to a transparent PNG (rounded white box + bold
-    black text + inline color emoji). Returns (width, height) in pixels."""
-    text_font = ImageFont.truetype(str(font_path), fs)
-    ascent, descent = text_font.getmetrics()
-    line_h = ascent + descent
-    em_size = int(fs * 1.02)
-
+def _measure_runs(
+    text: str, fs: int, font: "ImageFont.FreeTypeFont", emoji_font: Path | None,
+) -> tuple[list[tuple[str, str, int, Image.Image | None]], int]:
     runs: list[tuple[str, str, int, Image.Image | None]] = []
     total = 0
+    em_size = int(fs * 1.02)
     for part in _EMOJI.split(text):
         if not part:
             continue
@@ -77,31 +66,76 @@ def render_caption(
                 runs.append(("emoji", ch, w, im))
                 total += w
         else:
-            w = int(text_font.getlength(part))
+            w = int(font.getlength(part))
             runs.append(("text", part, w, None))
             total += w
+    return runs, total
 
-    padx, pady = int(fs * 0.5), int(fs * 0.34)
-    box_w = total + 2 * padx
+
+def render_block(
+    lines: list[tuple[str, int]],
+    font_path: Path,
+    out_png: Path,
+    emoji_font: Path | None = None,
+    max_width: int | None = None,
+) -> tuple[int, int]:
+    """Render a caption BLOCK to a transparent PNG: ONE rounded white box
+    wrapping every line, bold black text + inline color emoji, each line
+    centered. `lines` is a list of (text, font_size). Returns (width, height)."""
+    prepared = []  # (fs, font, runs, line_w, line_h)
+    max_fs = 1
+    for text, fs in lines:
+        text = " ".join(text.split())
+        if not text:
+            continue
+        f = ImageFont.truetype(str(font_path), fs)
+        asc, desc = f.getmetrics()
+        runs, total = _measure_runs(text, fs, f, emoji_font)
+        prepared.append((fs, f, runs, total, asc + desc))
+        max_fs = max(max_fs, fs)
+    if not prepared:
+        prepared = [(48, ImageFont.truetype(str(font_path), 48), [], 0, 48)]
+
+    # Corner radius drives the padding: content must sit clear of the rounded
+    # corners or glyphs at the edges (esp. wide emoji) get clipped by the arc.
+    radius0 = int(max_fs * 0.5)
+    padx = radius0 + int(max_fs * 0.3)
+    pady = int(max_fs * 0.38)
+    gap = int(max_fs * 0.12)
+    content_w = max(w for _, _, _, w, _ in prepared)
+    box_w = content_w + 2 * padx
     if max_width:
         box_w = min(box_w, max_width)
-    box_h = line_h + 2 * pady
+    box_h = sum(lh for *_, lh in prepared) + gap * (len(prepared) - 1) + 2 * pady
+
     img = Image.new("RGBA", (box_w, box_h), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
-    d.rounded_rectangle([0, 0, box_w - 1, box_h - 1], radius=int(box_h * 0.28),
+    radius = min(radius0, box_h // 2, box_w // 2)
+    d.rounded_rectangle([0, 0, box_w - 1, box_h - 1], radius=radius,
                         fill=(255, 255, 255, 255))
 
-    x = padx
-    for kind, val, w, im in runs:
-        if kind == "text":
-            d.text((x, pady), val, font=text_font, fill=(0, 0, 0, 255))
-        elif im is not None:
-            img.alpha_composite(im, (x + int(fs * 0.04), pady + (line_h - im.height) // 2))
-        x += w
+    y = pady
+    for fs, f, runs, line_w, line_h in prepared:
+        x = (box_w - line_w) // 2
+        for kind, val, w, im in runs:
+            if kind == "text":
+                d.text((x, y), val, font=f, fill=(0, 0, 0, 255))
+            elif im is not None:
+                img.alpha_composite(im, (x + int(fs * 0.04), y + (line_h - im.height) // 2))
+            x += w
+        y += line_h + gap
 
     out_png.parent.mkdir(parents=True, exist_ok=True)
     img.save(out_png)
     return box_w, box_h
+
+
+def render_caption(
+    text: str, font_path: Path, fs: int, out_png: Path,
+    emoji_font: Path | None = None, max_width: int | None = None,
+) -> tuple[int, int]:
+    """Single-line convenience wrapper around render_block."""
+    return render_block([(text, fs)], font_path, out_png, emoji_font, max_width)
 
 
 def fit_font_size(text: str, font_path: Path, max_px: int, base: int = 90,

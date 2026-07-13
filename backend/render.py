@@ -1093,36 +1093,33 @@ def _render_short(
     cap_dir = work / "shortcaps"
     caps: list[tuple[Path, int, int, float, float]] = []  # png, x, y, start, end
 
-    def _add_cap(text: str, fs: int, cy: int, s: float, e: float) -> None:
-        text = " ".join(text.split())
-        if not text or e <= s:
+    def _add_block(lines: list[tuple[str, int]], cy: int, s: float, e: float) -> None:
+        lines = [(" ".join(t.split()), fs) for t, fs in lines if t and t.strip()]
+        if not lines or e <= s:
             return
         png = cap_dir / f"cap_{len(caps):02d}.png"
         try:
-            w, h = short_captions.render_caption(
-                text, font_path, fs, png, emoji_font=emoji_font,
-                max_width=_SHORT_W - 40,
+            w, h = short_captions.render_block(
+                lines, font_path, png, emoji_font=emoji_font, max_width=_SHORT_W - 40,
             )
         except Exception as ex:
-            print(f"[short] caption skipped ({text[:24]!r}): {ex}")
+            print(f"[short] caption skipped: {ex}")
             return
         caps.append((png, (_SHORT_W - w) // 2, int(cy - h / 2), s, e))
 
-    # Custom heading near the top (whole content span), wrapped to fit.
+    # Custom heading: ONE rounded box wrapping all lines, near the top.
     if short_title.strip():
         hlen = len(short_title.strip())
         h_fs = 96 if hlen <= 20 else 84 if hlen <= 36 else 70 if hlen <= 60 else 60
         try:
-            hlines = short_captions.wrap_text(short_title.strip(), h_fs, font_path, _SHORT_W - 150)
+            hlines = short_captions.wrap_text(short_title.strip(), h_fs, font_path, 840)
         except Exception:
             hlines = [short_title.strip()]
-        gap = int(h_fs * 1.72)
-        for i, ln in enumerate(hlines):
-            _add_cap(ln, h_fs, 300 + i * gap, 0.0, card_start)
+        _add_block([(ln, h_fs) for ln in hlines], 360, 0.0, card_start)
 
-    # Per-drop artist + track name, stacked near the bottom (safe zone). They
-    # pop in ON THE DROP (the kick), not during the lead-in.
-    bot_y = min(_SHORT_WIN_BOT - _SHORT_BAR_H // 2, _SHORT_VID_Y + _SHORT_VID_H + 96)
+    # Per-drop artist + track name in ONE box near the bottom (safe zone),
+    # popping in ON THE DROP (the kick), not during the lead-in.
+    bot_cy = 1360
     for title, s, e in windows:
         if s >= card_start:
             continue
@@ -1133,22 +1130,26 @@ def _render_short(
         artist, track = (title.split(" - ", 1) if " - " in title else ("", title))
         artist, track = artist.strip(), track.strip()
         try:
-            t_fs = short_captions.fit_font_size(track, font_path, _SHORT_W - 150, base=90)
+            t_fs = short_captions.fit_font_size(track, font_path, 840, base=90)
         except Exception:
             t_fs = 80
+        block: list[tuple[str, int]] = []
         if artist:
             try:
-                a_fs = short_captions.fit_font_size(artist, font_path, _SHORT_W - 170, base=min(t_fs, 72))
+                a_fs = short_captions.fit_font_size(artist, font_path, 820, base=min(t_fs, 74))
             except Exception:
                 a_fs = min(t_fs, 68)
-            _add_cap(artist, a_fs, bot_y - int(t_fs * 1.7), drop_s, e)
-        _add_cap(track, t_fs, bot_y, drop_s, e)
+            block.append((artist, a_fs))
+        block.append((track, t_fs))
+        _add_block(block, bot_cy, drop_s, e)
 
     if end_card:
         words = _SHORT_END_CARD_TEXT.split()
         half = (len(words) + 1) // 2
-        for i, ln in enumerate([" ".join(words[:half]), " ".join(words[half:])]):
-            _add_cap(ln, 78, _SHORT_H // 2 - 70 + i * 150, card_start, dur)
+        _add_block(
+            [(" ".join(words[:half]), 78), (" ".join(words[half:]), 78)],
+            _SHORT_H // 2, card_start, dur,
+        )
 
     # Base picture: branded template blend, or clean cover-fill.
     a_in = 2 if overlay else 1

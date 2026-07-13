@@ -9,7 +9,9 @@ Run in dev with a built frontend:  `python app.py`
 
 from __future__ import annotations
 
+import json
 import os
+import re
 import socket
 import sys
 import threading
@@ -20,6 +22,47 @@ FROZEN = getattr(sys, "frozen", False)
 # When frozen, PyInstaller extracts everything under sys._MEIPASS; in dev the
 # repo root is this file's directory.
 BASE = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
+
+# A windowed build (console=False) has no console, so PyInstaller leaves
+# sys.stdout / sys.stderr as None. Two things then break: any stray print()
+# raises, and uvicorn's default log formatter calls sys.stdout.isatty() to pick
+# colors, crashing with "'NoneType' object has no attribute 'isatty'" ->
+# "Unable to configure formatter 'default'". Give them a harmless sink.
+if sys.stdout is None or sys.stderr is None:
+    import io
+
+    class _NullStream(io.TextIOBase):
+        def write(self, _s):  # noqa: D401 - swallow output silently
+            return 0
+
+        def isatty(self):
+            return False
+
+        def flush(self):
+            pass
+
+    if sys.stdout is None:
+        sys.stdout = _NullStream()
+    if sys.stderr is None:
+        sys.stderr = _NullStream()
+
+# On Windows, a windowed (no-console) build flashes a console window for every
+# child process the backend spawns (ffmpeg / ffprobe / yt-dlp) — several appear
+# during the startup track scan. The backend runs in THIS process (app.py
+# imports `main`), so patching subprocess.Popen here — before the backend is
+# imported — transparently adds CREATE_NO_WINDOW to every subprocess call
+# (run/call/check_output all route through Popen). No backend edits needed.
+if sys.platform.startswith("win"):
+    import subprocess as _subprocess
+
+    _CREATE_NO_WINDOW = 0x08000000
+    _orig_popen_init = _subprocess.Popen.__init__
+
+    def _popen_no_window(self, *args, **kwargs):
+        kwargs["creationflags"] = kwargs.get("creationflags", 0) | _CREATE_NO_WINDOW
+        _orig_popen_init(self, *args, **kwargs)
+
+    _subprocess.Popen.__init__ = _popen_no_window
 
 # User-writable home for the library, caches, and DB (outside the read-only
 # bundle so it survives updates and app restarts).
@@ -37,24 +80,6 @@ _bin = BASE / "bin"
 if _bin.is_dir():
     os.environ["PATH"] = str(_bin) + os.pathsep + os.environ.get("PATH", "")
 
-# A windowed (console=False) build has no console for child processes to
-# inherit, so on Windows every ffmpeg/ffprobe/yt-dlp call would flash open its
-# own console window. Force CREATE_NO_WINDOW on every subprocess the backend
-# spawns (patched before importing it; GUI children like explorer.exe are
-# unaffected, the flag only suppresses consoles).
-if sys.platform.startswith("win"):
-    import subprocess
-
-    _orig_popen_init = subprocess.Popen.__init__
-
-    def _no_window_init(self, *args, **kwargs):
-        kwargs["creationflags"] = (
-            kwargs.get("creationflags") or 0
-        ) | subprocess.CREATE_NO_WINDOW
-        _orig_popen_init(self, *args, **kwargs)
-
-    subprocess.Popen.__init__ = _no_window_init
-
 # The backend modules are top-level (the server runs with backend/ as cwd), so
 # put it on the path before importing.
 BACKEND_DIR = BASE / "backend"
@@ -65,6 +90,50 @@ if BACKEND_DIR.is_dir():
 DIST_DIR = BASE / "dist"
 if not DIST_DIR.is_dir():
     DIST_DIR = BASE / "frontend" / "dist"
+
+
+def _app_version() -> str:
+    """Current version, read at runtime (never hardcoded). Env override wins,
+    else the newest changelog entry from the bundled/source changelog.ts."""
+    env = os.environ.get("AUTOMIX_VERSION")
+    if env:
+        return env.lstrip("vV")
+    try:
+        txt = (BASE / "frontend" / "src" / "changelog.ts").read_text(encoding="utf-8")
+        m = re.search(r'version:\s*"([^"]+)"', txt)
+        if m:
+            return m.group(1)
+    except Exception:
+        pass
+    return ""
+
+
+def _app_author() -> str:
+    """Creator name, read at runtime. Env override wins, else package.json."""
+    env = os.environ.get("AUTOMIX_AUTHOR")
+    if env:
+        return env
+    try:
+        pkg = json.loads((BASE / "package.json").read_text(encoding="utf-8"))
+        author = pkg.get("author")
+        if isinstance(author, dict):
+            author = author.get("name")
+        if author:
+            return str(author)
+    except Exception:
+        pass
+    return ""
+
+
+# Splash credit line (bottom-left), e.g. "Nathan Rodrigues  ·  v0.13.1". Shown
+# as live splash text above the boot status, so nothing is baked into the image.
+def _credit_line() -> str:
+    name, ver = _app_author(), _app_version()
+    bits = [b for b in (name, f"v{ver}" if ver else "") if b]
+    return "  ·  ".join(bits)
+
+
+_CREDIT = _credit_line()
 
 
 def _port_is_free(port: int) -> bool:
@@ -105,12 +174,16 @@ def _stable_port() -> int:
 
 def _splash(text: str | None = None, close: bool = False) -> None:
     """Update or close the PyInstaller boot splash (no-op outside a frozen
-    Windows/Linux build — pyi_splash only exists when the spec bundles one)."""
+    Windows/Linux build — pyi_splash only exists when the spec bundles one).
+
+    The status message renders on top; the credit line (name + version) shows
+    on the line below it — both as live text, bottom-center."""
     try:
         import pyi_splash
 
         if text is not None:
-            pyi_splash.update_text(text)
+            msg = "\n".join(b for b in (text, _CREDIT) if b) or text
+            pyi_splash.update_text(msg)
         if close:
             pyi_splash.close()
     except Exception:
@@ -154,7 +227,14 @@ def _launch() -> None:
 
     def serve() -> None:
         try:
-            uvicorn.run(app, host="127.0.0.1", port=port, log_level="warning")
+            # log_config=None skips uvicorn's dictConfig (whose default
+            # formatter probes sys.stdout.isatty()); logging falls back to the
+            # already-configured root logger. Safe even with the stdio guard
+            # above, and avoids color escape codes in a windowed build.
+            uvicorn.run(
+                app, host="127.0.0.1", port=port, log_level="warning",
+                log_config=None,
+            )
         except BaseException:
             import traceback
 

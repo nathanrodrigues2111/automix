@@ -89,22 +89,6 @@ export function SettingsDialog({
     toast.success("Settings reset to defaults")
   }
 
-  const openDevTools = () => {
-    // pywebview may expose an API to open the inspector; otherwise F12 works in
-    // the packaged app (debug build) and natively in the browser.
-    const pw = (window as unknown as { pywebview?: { api?: Record<string, unknown> } }).pywebview
-    const fn = pw?.api?.open_devtools
-    if (typeof fn === "function") {
-      try {
-        ;(fn as () => void)()
-        return
-      } catch {
-        // fall through to the hint
-      }
-    }
-    toast.info("Press F12 to open the developer console")
-  }
-
   const recomputeTargetBpm = (mode: BpmMode) => {
     if (mode === "manual" || clipBpms.length === 0) return
     const target =
@@ -625,24 +609,12 @@ export function SettingsDialog({
               onChange={(v) => setConfig({ ...config, short_overlay: v })}
             />
 
-            <div className="space-y-3">
-              <Label className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
-                Short title
-              </Label>
-              <Input
-                value={config.short_title ?? ""}
-                onChange={(e) =>
-                  setConfig({ ...config, short_title: e.target.value })
-                }
-                placeholder="e.g. When the entire arena sings your tune"
-                aria-label="Short title caption"
-                className="bg-background/60 text-sm"
-              />
-              <p className="text-[11px] leading-relaxed text-muted-foreground">
-                A caption burned near the top of the Short in a bold boxed
-                style. Leave empty for none.
-              </p>
-            </div>
+            {/*
+              Short title field removed from Settings (per request) — it now
+              lives only in the Render dialog (RenderDialog.tsx), which keeps its
+              own local state seeded from config.short_title. The config field
+              itself is unchanged, so the render flow and ShortPreview still work.
+            */}
 
             <div className="space-y-3">
               <Label className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
@@ -866,22 +838,6 @@ export function SettingsDialog({
 
           <section className="space-y-3">
             <SectionLabel>Debug</SectionLabel>
-            <div className="flex items-center justify-between gap-3">
-              <div className="min-w-0">
-                <div className="text-sm font-medium">Developer console</div>
-                <div className="text-[11px] leading-relaxed text-muted-foreground">
-                  Open the console to see logs and errors. F12 works too.
-                </div>
-              </div>
-              <Button
-                variant="outline"
-                size="sm"
-                className="h-7 shrink-0 text-xs"
-                onClick={openDevTools}
-              >
-                Open console
-              </Button>
-            </div>
             <div className="flex items-center justify-between gap-3">
               <div className="min-w-0">
                 <div className="text-sm font-medium">Reset settings</div>

@@ -2,6 +2,7 @@
   "name": "automix",
   "private": true,
   "version": "0.0.0",
+  "author": "Nathan Rodrigues",
   "description": "Local EDM auto-mixer — orchestration scripts for the backend + frontend monorepo.",
   "scripts": {
     "setup": "node scripts/setup.mjs",

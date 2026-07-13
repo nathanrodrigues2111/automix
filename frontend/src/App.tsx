@@ -26,7 +26,9 @@ import { TrackList } from "@/components/TrackList"
 import { Timeline } from "@/components/Timeline"
 import { VideoPreview } from "@/components/VideoPreview"
 import { MixEditor, type EditorClip } from "@/components/MixEditor"
-import { ModelStatusBanner } from "@/components/ModelDownloadDialog"
+// Lite analysis mode banner is hidden for now — see the note at its render site
+// below. Component still lives in components/ModelDownloadDialog.tsx.
+// import { ModelStatusBanner } from "@/components/ModelDownloadDialog"
 import { ProjectsDialog } from "@/components/ProjectsScreen"
 import { RenderDialog } from "@/components/RenderDialog"
 import { SettingsDialog } from "@/components/SettingsDialog"
@@ -801,7 +803,14 @@ export default function App() {
         </div>
       </header>
 
-      <ModelStatusBanner progress={progress} />
+      {/*
+        Lite analysis mode banner — hidden for now (per request). The desktop
+        build ships without the optional allin1/demucs neural stack, so this
+        banner always showed and added noise. The component is kept intact in
+        components/ModelDownloadDialog.tsx; to restore, re-enable the import
+        above and render it here again:
+          <ModelStatusBanner progress={progress} />
+      */}
 
       <nav
         className="grid grid-cols-3 gap-1 border-b border-border/60 bg-card/30 p-1.5 lg:hidden"

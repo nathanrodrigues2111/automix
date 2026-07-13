@@ -19,6 +19,10 @@ datas = [
     (str(ROOT / "backend"), "backend"),
     (str(ROOT / "frontend" / "dist"), "dist"),
     (str(ROOT / "assets"), "assets"),
+    # Read at runtime by app.py for the splash credit line (name + version),
+    # so those values stay dynamic instead of baked into the splash image.
+    (str(ROOT / "package.json"), "."),
+    (str(ROOT / "frontend" / "src" / "changelog.ts"), "frontend/src"),
 ]
 binaries = []
 
@@ -73,14 +77,23 @@ pyz = PYZ(a.pure)
 splash = None
 if sys.platform != "darwin":
     try:
+        # PyInstaller hard-codes the splash text anchor to bottom-left ("sw").
+        # Flip it to bottom-center ("s") so a horizontally-centered text_pos
+        # truly centers the (already center-justified) credit + status lines.
+        from PyInstaller.building import splash_templates as _spt
+        _spt.splash_canvas_text = _spt.splash_canvas_text.replace(
+            "-anchor sw", "-anchor s"
+        )
         splash = Splash(
             str(ROOT / "packaging" / "splash.png"),
             binaries=a.binaries,
             datas=a.datas,
-            # Status sits under the accent line, above the bottom credit line.
-            text_pos=(272, 292),
-            text_size=9,
-            text_color="#7d8aa0",
+            # Bottom-center: app.py renders the credit line (name + version) here,
+            # with the live boot status on the line below it. x = image width / 2
+            # (640 / 2 = 320); the anchor override above makes this the center.
+            text_pos=(320, 360),
+            text_size=11,
+            text_color="#c7d2e4",
             text_default="Starting…",
             minify_script=True,
             always_on_top=False,

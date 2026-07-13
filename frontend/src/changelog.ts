@@ -9,6 +9,20 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "0.13.2",
+    date: "2026-07-14",
+    title: "Startup fixes and a cleaner desktop app",
+    items: [
+      "Fixed a bug where the Windows app could fail to start right after launching, showing a startup error about a log formatter. It now boots reliably",
+      "No more brief black command windows flashing on screen while the app starts up or renders on Windows",
+      "Refreshed the startup splash screen with the app logo and name, and the version and loading status centered at the bottom",
+      "Removed the Lite analysis mode banner from the top of the app",
+      "The Short title caption is now set in the Render dialog only, and has been removed from Settings",
+      "Removed the developer console shortcut from Settings, which did not work in the desktop app",
+      "Building the Windows app locally now closes any running copy first, so a rebuild no longer fails with a file in use error",
+    ],
+  },
+  {
     version: "0.13.1",
     date: "2026-07-13",
     title: "A splash screen while the app starts",

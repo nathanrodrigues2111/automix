@@ -73,8 +73,23 @@ if ($missing.Count -gt 0) {
     Write-Host "  bin\ ok" -ForegroundColor Green
 }
 
+# 3b. Regenerate the boot splash so name + version reflect the current source
+# (read live from package.json / changelog.ts; never baked into a stale PNG).
+Write-Host "`n[3b] Regenerating splash.png ..." -ForegroundColor Cyan
+& uv run --with pillow python (Join-Path $Root "packaging\make_splash.py")
+if ($LASTEXITCODE -ne 0) { throw "make_splash.py failed" }
+
 # 4. Freeze.
 Write-Host "`n[4/4] Running PyInstaller (this takes a few minutes) ..." -ForegroundColor Cyan
+# A running Automix.exe holds file locks under dist\Automix\_internal, which
+# makes PyInstaller's clean of the old dist fail with WinError 5 / 145. Close it
+# first so the rebuild always succeeds.
+$running = Get-Process Automix -ErrorAction SilentlyContinue
+if ($running) {
+    Write-Host "  Closing running Automix.exe (PID $($running.Id -join ', ')) ..." -ForegroundColor Yellow
+    $running | Stop-Process -Force
+    Start-Sleep -Milliseconds 800
+}
 if (Test-Path (Join-Path $Root "build")) { Remove-Item -Recurse -Force (Join-Path $Root "build") }
 if (Test-Path (Join-Path $Root "dist"))  { Remove-Item -Recurse -Force (Join-Path $Root "dist") }
 & $Pyinstaller --noconfirm (Join-Path $Root "packaging\automix.spec")

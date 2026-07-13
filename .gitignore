@@ -59,3 +59,10 @@ desktop.ini
 assets/fonts/*
 !assets/fonts/BebasNeue-Regular.ttf
 !assets/fonts/Cubano.ttf
+
+# Splash video background (personal / third-party artwork) and the generated
+# splash.png it bakes into — kept local only, never committed and never shipped
+# in public CI builds. The splash is regenerated at build time (build-local.ps1
+# + the release workflow), so a tracked copy is not needed.
+assets/splash-screen-bg.mp4
+packaging/splash.png

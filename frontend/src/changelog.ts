@@ -9,6 +9,18 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "0.13.0",
+    date: "2026-07-13",
+    title: "Projects are now full workspaces",
+    items: [
+      "Projects are now complete workspaces: each one keeps its own downloaded tracks and rendered mixes separate from the others, so you can keep different mixes cleanly apart",
+      "A new Projects screen greets you on startup to open a recent workspace or start a fresh one, and you can switch or create projects any time from the header",
+      "Rename a project in place, and delete one to clear out its tracks and mixes when you are done with it",
+      "The app remembers the project you had open and reopens it next time",
+      "The desktop app now opens in a normal resizable window by default instead of taking over the full screen",
+    ],
+  },
+  {
     version: "0.12.0",
     date: "2026-07-13",
     title: "GPU rendering, punchier Shorts, and a Windows render fix",

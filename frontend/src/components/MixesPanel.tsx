@@ -416,7 +416,9 @@ export function MixesPanel({ progress }: MixesPanelProps) {
                           title={shownName}
                           autoPlay
                           className={
-                            showingShort ? "mx-auto max-w-[280px]" : undefined
+                            showingShort
+                              ? "mx-auto aspect-[9/16] h-[min(70vh,640px)] w-auto"
+                              : undefined
                           }
                         />
                       </div>

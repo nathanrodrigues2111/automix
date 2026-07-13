@@ -1673,7 +1673,15 @@ def render_mix(
     canvas = _RESOLUTIONS.get(str(config.get("resolution", "1080p")), (_BRAND_W, _BRAND_H))
 
     intro_cfg = config.get("intro_path")
-    intro_path = Path(intro_cfg) if intro_cfg else (ASSETS_DIR / "into.avi")
+    if intro_cfg:
+        intro_path = Path(intro_cfg)
+    else:
+        # Prefer the full-res source; fall back to the small bundled mp4 so the
+        # intro still plays without the 2.7GB into.avi (dev checkouts and
+        # packaged builds ship only the mp4).
+        intro_path = ASSETS_DIR / "into.avi"
+        if not intro_path.exists():
+            intro_path = ASSETS_DIR / "intro.mp4"
     intro_dur = 0.0
     if config.get("intro_overlay", True) and intro_path.exists():
         try:

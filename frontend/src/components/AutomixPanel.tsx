@@ -92,13 +92,15 @@ export function AutomixPanel({
   const [wholePlaylist, setWholePlaylist] = useState(false)
 
   const [url, setUrl] = useState("")
-  const [maxTracks, setMaxTracks] = useState("")
   const [urlError, setUrlError] = useState<string | null>(null)
   const [job, setJob] = useState<{ id: string; kind: JobKind } | null>(null)
   const [panelHidden, setPanelHidden] = useState(false)
   const [log, setLog] = useState<LogLine[]>([])
   const [showLog, setShowLog] = useState(true)
   const logRef = useRef<HTMLDivElement>(null)
+  // Wraps the header form + its floating status dropdown so a click anywhere
+  // outside the widget dismisses the panel (the job keeps running).
+  const panelWrapRef = useRef<HTMLDivElement>(null)
   const notifiedJobRef = useRef<string | null>(null)
   const downloadedJobRef = useRef<string | null>(null)
 
@@ -116,6 +118,20 @@ export function AutomixPanel({
     setLog([])
     setPanelHidden(false)
   }, [job?.id])
+
+  // Dismiss the floating status dropdown on any click outside the widget
+  // (in the header variant). Mirrors the panel's close button.
+  useEffect(() => {
+    if (!compact) return
+    const showing = (!!urlError || !!job) && !panelHidden
+    if (!showing) return
+    const onDown = (e: PointerEvent) => {
+      const el = panelWrapRef.current
+      if (el && !el.contains(e.target as Node)) setPanelHidden(true)
+    }
+    document.addEventListener("pointerdown", onDown, true)
+    return () => document.removeEventListener("pointerdown", onDown, true)
+  }, [compact, urlError, job, panelHidden])
 
   useEffect(() => {
     if (!job || !p?.message) return
@@ -176,16 +192,11 @@ export function AutomixPanel({
     return trimmed
   }
 
-  const parsedMaxTracks = (): number | null => {
-    const n = parseInt(maxTracks, 10)
-    return Number.isFinite(n) && n > 0 ? n : null
-  }
-
   const startAutomix = () => {
     const u = validateUrl()
     if (!u) return
     automix.mutate(
-      { url: u, max_tracks: parsedMaxTracks(), max_height: loadDownloadMaxHeight() },
+      { url: u, max_tracks: null, max_height: loadDownloadMaxHeight() },
       {
         onSuccess: (res) => setJob({ id: res.job_id, kind: "automix" }),
         onError: (e) => toast.error(`Auto-Mix failed: ${e.message}`),
@@ -197,7 +208,7 @@ export function AutomixPanel({
     const u = validateUrl()
     if (!u) return
     youtubeImport.mutate(
-      { url: u, max_tracks: parsedMaxTracks(), max_height: loadDownloadMaxHeight() },
+      { url: u, max_tracks: null, max_height: loadDownloadMaxHeight() },
       {
         onSuccess: (res) => setJob({ id: res.job_id, kind: "import" }),
         onError: (e) => toast.error(`Import failed: ${e.message}`),
@@ -215,7 +226,7 @@ export function AutomixPanel({
     const u = validateUrl()
     if (!u) return
     playlistEntries.mutate(
-      { url: u, max_tracks: parsedMaxTracks() },
+      { url: u, max_tracks: null },
       {
         onSuccess: (list) => {
           // Dedupe by video id — playlists can contain the same video twice,
@@ -305,21 +316,6 @@ export function AutomixPanel({
             )}
           />
           <div className="flex items-center gap-2">
-            <Input
-              type="number"
-              min={1}
-              max={100}
-              value={maxTracks}
-              onChange={(e) => setMaxTracks(e.target.value)}
-              placeholder="All"
-              aria-label="Max tracks"
-              title="Max tracks to pull from the playlist (empty = all)"
-              disabled={running}
-              className={cn(
-                "w-20 bg-background/60 tabular-nums",
-                compact && "h-8 w-16 text-sm",
-              )}
-            />
             {automixEnabled && (
               <Button
                 type="submit"
@@ -722,7 +718,7 @@ export function AutomixPanel({
   if (compact) {
     const hasStatus = !!urlError || !!job
     return (
-      <div className="relative min-w-0 flex-1">
+      <div ref={panelWrapRef} className="relative min-w-0 flex-1">
         {chooserEl}
         {formEl}
         {hasStatus && !panelHidden && (

@@ -8,7 +8,7 @@ import subprocess
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from fastapi import (
     FastAPI,
@@ -619,6 +619,44 @@ def get_font_file(font_id: str) -> FileResponse:
     raise HTTPException(status_code=404, detail="font not found")
 
 
+def _analyze_imported(
+    results: list[dict],
+    progress: "ProgressCb",
+    is_cancelled: Callable[[], bool],
+) -> int:
+    """Analyze freshly imported tracks so they are ready to mix straight away.
+    Skips tracks that already carry an analysis; one failure never aborts the
+    batch. Progress is reported across the 50-100% band (download owns 0-50).
+    Returns the count now analyzed."""
+    n = max(len(results), 1)
+    analyzed = 0
+    for i, r in enumerate(results):
+        if is_cancelled():
+            break
+        path = Path(r["path"])
+        if not path.exists():
+            continue
+        fh = analysis_mod.file_hash(path)
+        if db.get_analysis(fh):
+            analyzed += 1
+            continue
+        title = r.get("title") or path.stem
+        base = 50.0 + i / n * 50.0
+        span = 50.0 / n
+
+        def sub(stage: str, pct: float, m: str = "", _b=base, _s=span, _t=title) -> None:
+            progress("analysis", min(99.0, _b + pct / 100.0 * _s), f"Analyzing {_t}")
+
+        try:
+            cached = analysis_mod.analyze_track(path, sub)
+            db.put_analysis(fh, cached)
+            analyzed += 1
+        except Exception:
+            # A bad track must not abort analysis of the rest.
+            continue
+    return analyzed
+
+
 @app.post("/api/youtube/import")
 async def post_youtube_import(req: schemas.YouTubeImportRequest) -> dict:
     job_id = uuid.uuid4().hex
@@ -627,22 +665,32 @@ async def post_youtube_import(req: schemas.YouTubeImportRequest) -> dict:
 
     async def _run():
         try:
+            # Download owns the first half of the progress bar; the new
+            # auto-analysis pass owns the second half.
+            def dl_progress(stage: str, pct: float, msg: str = "") -> None:
+                progress(stage, pct * 0.5, msg)
+
             results = await asyncio.to_thread(
                 youtube_mod.import_playlist,
                 req.url,
                 IMPORTS_DIR,
-                progress,
+                dl_progress,
                 req.max_tracks,
                 req.video_ids,
                 cancel_ev.is_set,
                 req.max_height,
             )
+            # Auto-analyze so imported tracks are immediately mixable.
+            progress("analysis", 50.0, f"Analyzing {len(results)} imported tracks")
+            analyzed = await asyncio.to_thread(
+                _analyze_imported, results, progress, cancel_ev.is_set
+            )
             hub.publish_sync(
                 {
                     "job_id": job_id,
-                    "stage": "download",
+                    "stage": "analysis",
                     "percent": 100.0,
-                    "message": f"Imported {len(results)} tracks",
+                    "message": f"Imported and analyzed {analyzed}/{len(results)} tracks",
                     "done": True,
                 }
             )

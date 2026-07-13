@@ -220,7 +220,7 @@ export function RenderDialog({
               autoPlay
               className={
                 activeVideo === "short"
-                  ? "mx-auto max-w-[280px] ring-emerald-500/25"
+                  ? "mx-auto aspect-[9/16] h-[min(60vh,520px)] w-auto ring-emerald-500/25"
                   : "ring-emerald-500/25"
               }
             />

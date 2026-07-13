@@ -24,6 +24,7 @@ export const CHANGELOG: ChangelogEntry[] = [
       "New Short overlay setting: turn it off for a clean full-width Short with no EDMPAPA template, the track titles still burned in",
       "Add a custom Short title: a bold boxed caption (TikTok/CapCut style) burned near the top of the Short, set in Settings > Output",
       "Short captions now have rounded boxes and full-color emoji (type an emoji in the Short title and it shows in color)",
+      "New live Short preview in Settings > Shorts showing how the title and track captions will look",
       "The Short video now zooms to fill the whole vertical frame (aspect kept, edges cropped) instead of leaving black bars",
       "New Short end card toggle (the 'watch the full video' card) in Settings, off by default",
       "The Short's artist and track name show together (stacked) at the bottom and pop in on the drop, clear of the YouTube Shorts buttons and caption",

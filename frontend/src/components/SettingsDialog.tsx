@@ -49,6 +49,8 @@ interface SettingsDialogProps {
   setConfig: (config: Omit<RenderConfig, "clips">) => void
   loopPreviews: boolean
   onLoopPreviewsChange: (v: boolean) => void
+  hideAutomixButton: boolean
+  onHideAutomixButtonChange: (v: boolean) => void
   /** BPMs of the clips currently in the mix, in order — used by the
    *  "first"/"median" target-BPM modes. */
   clipBpms: number[]
@@ -62,6 +64,8 @@ export function SettingsDialog({
   setConfig,
   loopPreviews,
   onLoopPreviewsChange,
+  hideAutomixButton,
+  onHideAutomixButtonChange,
   clipBpms,
   onStartTour,
 }: SettingsDialogProps) {
@@ -284,7 +288,7 @@ export function SettingsDialog({
 
             <div className="space-y-3">
               <Label className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
-                Drop length
+                Full video drop length
               </Label>
               <Select
                 value={String(config.drop_bars ?? 0)}
@@ -306,6 +310,34 @@ export function SettingsDialog({
               <p className="text-[11px] leading-relaxed text-muted-foreground">
                 How long each drop plays from its kick. Applies to drops you
                 add next and to Auto-Mix.
+              </p>
+            </div>
+
+            <div className="space-y-3">
+              <Label className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+                Short drop length
+              </Label>
+              <Select
+                value={String(config.short_drop_bars ?? 0)}
+                onValueChange={(v) =>
+                  setConfig({ ...config, short_drop_bars: parseInt(v, 10) })
+                }
+              >
+                <SelectTrigger className="bg-background/60 text-xs">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="0">Same as full video</SelectItem>
+                  <SelectItem value="2">2 bars</SelectItem>
+                  <SelectItem value="4">4 bars</SelectItem>
+                  <SelectItem value="8">8 bars</SelectItem>
+                  <SelectItem value="12">12 bars</SelectItem>
+                </SelectContent>
+              </Select>
+              <p className="text-[11px] leading-relaxed text-muted-foreground">
+                Drop length for the vertical Short. When it differs from the
+                full video, a separate shorter Short is rendered (adds render
+                time). Same as full video keeps one render for both.
               </p>
             </div>
 
@@ -530,6 +562,33 @@ export function SettingsDialog({
               checked={config.make_short ?? true}
               onChange={(v) => setConfig({ ...config, make_short: v })}
             />
+
+            <div className="space-y-3">
+              <Label className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+                Video encoder
+              </Label>
+              <Select
+                value={config.hw_accel ?? "auto"}
+                onValueChange={(v) => setConfig({ ...config, hw_accel: v })}
+              >
+                <SelectTrigger className="bg-background/60 text-xs">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="auto">Auto (GPU if available)</SelectItem>
+                  <SelectItem value="cpu">CPU (libx264)</SelectItem>
+                  <SelectItem value="nvenc">NVIDIA GPU (NVENC)</SelectItem>
+                  <SelectItem value="qsv">Intel GPU (QSV)</SelectItem>
+                  <SelectItem value="amf">AMD GPU (AMF)</SelectItem>
+                  <SelectItem value="videotoolbox">Apple (VideoToolbox)</SelectItem>
+                </SelectContent>
+              </Select>
+              <p className="text-[11px] leading-relaxed text-muted-foreground">
+                Auto uses your GPU when a working hardware encoder is found and
+                falls back to CPU otherwise. A specific choice that is not
+                available on this machine also falls back to CPU.
+              </p>
+            </div>
           </section>
 
           <Separator className="bg-border/50" />
@@ -578,6 +637,17 @@ export function SettingsDialog({
               description="Repeat a previewed drop until you pause"
               checked={loopPreviews}
               onChange={onLoopPreviewsChange}
+            />
+          </section>
+          <Separator className="bg-border/50" />
+
+          <section className="space-y-3 pb-2">
+            <SectionLabel>Interface</SectionLabel>
+            <SwitchRow
+              title="Hide Auto-Mix button"
+              description="Remove the Auto-Mix button so a playlist only feeds Import and Choose"
+              checked={hideAutomixButton}
+              onChange={onHideAutomixButtonChange}
             />
           </section>
           <Separator className="bg-border/50" />

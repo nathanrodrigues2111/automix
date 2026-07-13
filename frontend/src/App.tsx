@@ -104,7 +104,9 @@ const DEFAULT_CONFIG: Omit<RenderConfig, "clips"> = {
   resolution: "1080p", // final render canvas
   filename_style: "file", // exports named after the source video + date/time
   make_short: true, // companion vertical Short of the first drop
-  drop_bars: 0, // 0 = auto (detected drop body); N forces every drop to N bars
+  drop_bars: 8, // full-mix drop length in bars (0 = auto detected body)
+  short_drop_bars: 4, // Short drop length; differs from drop_bars = separate Short mix
+  hw_accel: "auto", // GPU encoder when available, else CPU
   harmonic_pitch_shift_max_semitones: 0, // don't pitch-shift either
 }
 
@@ -182,11 +184,12 @@ function RefreshTitlesButton() {
 
 // v3: outro default changed to 10s. Bumping the key drops stale persisted
 // configs that would pin old defaults.
-const SETTINGS_KEY = "automix.settings.v3"
+const SETTINGS_KEY = "automix.settings.v4"
 
 interface StoredSettings {
   config?: Partial<Omit<RenderConfig, "clips">>
   loopPreviews?: boolean
+  hideAutomixButton?: boolean
 }
 
 function loadStoredSettings(): StoredSettings {
@@ -215,6 +218,11 @@ export default function App() {
   const [loopPreviews, setLoopPreviews] = useState<boolean>(
     () => loadStoredSettings().loopPreviews ?? true,
   )
+  // Optional: hide the Auto-Mix button so the playlist only feeds Import /
+  // Choose (hand-tuned workflow). Off by default — the button stays visible.
+  const [hideAutomixButton, setHideAutomixButton] = useState<boolean>(
+    () => loadStoredSettings().hideAutomixButton ?? false,
+  )
 
   // Selected title font: load it into the document so the preview title
   // renders with the exact font the mix will be burned with.
@@ -236,12 +244,16 @@ export default function App() {
     try {
       localStorage.setItem(
         SETTINGS_KEY,
-        JSON.stringify({ config, loopPreviews } satisfies StoredSettings),
+        JSON.stringify({
+          config,
+          loopPreviews,
+          hideAutomixButton,
+        } satisfies StoredSettings),
       )
     } catch {
       // storage unavailable — settings just won't persist
     }
-  }, [config, loopPreviews])
+  }, [config, loopPreviews, hideAutomixButton])
 
   const [projectDialog, setProjectDialog] = useState<"save" | "load" | null>(
     null,
@@ -716,7 +728,11 @@ export default function App() {
           </div>
         </div>
         <div data-tour="automix" className="order-last w-full min-w-0 basis-full lg:order-none lg:w-auto lg:max-w-3xl lg:flex-1 lg:basis-auto">
-          <AutomixPanel progress={progress} variant="header" />
+          <AutomixPanel
+            progress={progress}
+            variant="header"
+            hideAutomixButton={hideAutomixButton}
+          />
         </div>
         <div className="flex shrink-0 items-center gap-1.5">
           <ThemeToggle />
@@ -1058,6 +1074,8 @@ export default function App() {
         setConfig={setConfig}
         loopPreviews={loopPreviews}
         onLoopPreviewsChange={setLoopPreviews}
+        hideAutomixButton={hideAutomixButton}
+        onHideAutomixButtonChange={setHideAutomixButton}
         clipBpms={clipBpms}
         onStartTour={() => {
           setSettingsOpen(false)

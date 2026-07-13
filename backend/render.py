@@ -150,11 +150,93 @@ _RESOLUTIONS: dict[str, tuple[int, int]] = {
 }
 
 
+# --- Hardware (GPU) video encoder selection --------------------------------
+# `ffmpeg -encoders` lists every COMPILED encoder regardless of whether the
+# host actually has the GPU + a new-enough driver, so presence there proves
+# nothing (this box lists h264_nvenc but the driver is too old to use it). We
+# PROBE each candidate by encoding one real frame to a file; only a clean exit
+# with non-empty output counts. Results are cached for the process.
+_HW_CANDIDATES = ("h264_nvenc", "h264_qsv", "h264_amf", "h264_videotoolbox")
+_hw_probe_cache: dict[str, bool] = {}
+# Resolved video encoder for the CURRENT render, set at render_mix() entry.
+# Renders are serialized (one at a time), so a module global is safe and spares
+# us threading an encoder arg through every one of the ~6 encode call sites.
+_VIDEO_ENCODER = "libx264"
+
+
+def _hw_encoder_works(enc: str) -> bool:
+    """True if `enc` can actually encode a frame on this machine (probed once,
+    then cached)."""
+    if enc in _hw_probe_cache:
+        return _hw_probe_cache[enc]
+    ok = False
+    try:
+        with tempfile.TemporaryDirectory(prefix="hwprobe_") as td:
+            out = Path(td) / "p.mp4"
+            r = subprocess.run(
+                ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+                 "-f", "lavfi", "-i", "testsrc=size=320x240:rate=30:d=1",
+                 "-c:v", enc, str(out)],
+                capture_output=True,
+            )
+            ok = r.returncode == 0 and out.exists() and out.stat().st_size > 0
+    except Exception:
+        ok = False
+    if not ok:
+        print(f"[encoder] {enc} not usable on this machine")
+    _hw_probe_cache[enc] = ok
+    return ok
+
+
+def _resolve_video_encoder(pref: str) -> str:
+    """Map the `hw_accel` config value to a concrete, VERIFIED-working encoder.
+
+    'cpu'/'none'/'' -> libx264 (software, the default look).
+    'auto'/'gpu'    -> first hardware encoder that probes clean, else libx264.
+    a specific name ('nvenc', 'h264_qsv', ...) -> that encoder if it works,
+    else libx264. A bad/unavailable encoder choice must NEVER fail a render, so
+    every path falls back to software."""
+    p = (pref or "auto").strip().lower()
+    if p in ("cpu", "none", "software", "libx264", ""):
+        return "libx264"
+    if p in ("auto", "gpu"):
+        for enc in _HW_CANDIDATES:
+            if _hw_encoder_works(enc):
+                return enc
+        return "libx264"
+    alias = {"nvenc": "h264_nvenc", "qsv": "h264_qsv", "amf": "h264_amf",
+             "videotoolbox": "h264_videotoolbox"}
+    enc = alias.get(p, p if p.startswith("h264_") else "libx264")
+    if enc != "libx264" and _hw_encoder_works(enc):
+        return enc
+    if enc != "libx264":
+        print(f"[encoder] requested '{pref}' unavailable; using libx264")
+    return "libx264"
+
+
 def _x264_encode_args(proxy: bool, intermediate: bool = False) -> list[str]:
     """Encoder settings only — for use after a -filter_complex chain or any
     case where the video has already been normalized. `intermediate` picks a
     much faster preset for outputs that get re-encoded again downstream
-    (visually transparent at crf 16, big render-time win)."""
+    (visually transparent, big render-time win).
+
+    Honours the resolved `_VIDEO_ENCODER`: on a GPU build the equivalent
+    hardware knobs are substituted (NVENC/QSV/AMF/VideoToolbox use constant-
+    quality controls, not x264's -crf/-preset). CPU libx264 is unchanged."""
+    enc = _VIDEO_ENCODER
+    if enc.endswith("_nvenc"):
+        # NVENC: -cq is the constant-quality knob; presets p1(fast)..p7(slow).
+        cq, preset = ("33", "p1") if proxy else (("21", "p4") if intermediate else ("20", "p5"))
+        return ["-c:v", enc, "-preset", preset, "-rc", "vbr", "-cq", cq, "-b:v", "0"]
+    if enc.endswith("_qsv"):
+        gq, preset = ("33", "veryfast") if proxy else (("23", "veryfast") if intermediate else ("21", "medium"))
+        return ["-c:v", enc, "-global_quality", gq, "-preset", preset]
+    if enc.endswith("_amf"):
+        qp, q = ("30", "speed") if proxy else (("23", "balanced") if intermediate else ("21", "quality"))
+        return ["-c:v", enc, "-quality", q, "-rc", "cqp", "-qp_i", qp, "-qp_p", qp, "-qp_b", qp]
+    if enc.endswith("_videotoolbox"):
+        return ["-c:v", enc, "-q:v", ("40" if proxy else ("55" if intermediate else "60"))]
+    # CPU libx264 (default, unchanged behaviour).
     if proxy:
         return ["-c:v", "libx264", "-crf", "28", "-preset", "ultrafast"]
     if intermediate:
@@ -798,6 +880,23 @@ def _ass_escape(text: str) -> str:
     )
 
 
+def _ff_filter_path(p: Path | str) -> str:
+    """Escape a filesystem path for use as an option VALUE inside an ffmpeg
+    filtergraph (e.g. the `ass` filter's filename/fontsdir).
+
+    On Windows a raw path like `C:\\Users\\...\\titles.ass` breaks the
+    filtergraph parser: even inside single quotes the drive-letter colon is
+    read as an option separator ("No option name near '\\Users...'") and the
+    render fails with EINVAL. The fix (validated by ear/test on ffmpeg 8.x):
+    use forward slashes and escape every colon, then single-quote the result
+    at the call site -> `'C\\:/Users/.../titles.ass'`.
+
+    POSIX paths (Linux/macOS) contain no backslashes and no colons, so BOTH
+    replacements are no-ops there and the returned string is byte-identical to
+    the old behaviour."""
+    return str(p).replace("\\", "/").replace(":", "\\:")
+
+
 def _ass_time(t: float) -> str:
     t = max(0.0, t)
     h = int(t // 3600)
@@ -1043,7 +1142,7 @@ def _render_short(
         f"tpad=stop=-1:stop_mode=add:color=black,"
         f"drawbox=x={_SHORT_INSET_X}:y={_SHORT_WIN_TOP}:w={_SHORT_VID_W}:h={_SHORT_BAR_H}:color=black:t=fill,"
         f"drawbox=x={_SHORT_INSET_X}:y={bar_bot_y}:w={_SHORT_VID_W}:h={_SHORT_BAR_H}:color=black:t=fill,"
-        f"ass=filename='{ass_path}':fontsdir='{fonts_dir}',setsar=1,format=gbrp[base];"
+        f"ass=filename='{_ff_filter_path(ass_path)}':fontsdir='{_ff_filter_path(fonts_dir)}',setsar=1,format=gbrp[base];"
         f"[1:v]fps=30,scale={_SHORT_W}:{_SHORT_H},setsar=1,format=gbrp[tpl];"
         f"[base][tpl]blend=all_mode=screen,format=yuv420p[v];"
         # Audio fades out into the card and pads silent underneath it.
@@ -1057,9 +1156,10 @@ def _render_short(
         "-filter_complex", filt,
         "-map", "[v]", "-map", "[a]",
         "-t", f"{dur:.3f}",
-        # veryfast: Shorts get recompressed hard by YouTube anyway, and this
-        # keeps the companion render a small fraction of the mix's time.
-        "-c:v", "libx264", "-crf", "18", "-preset", "veryfast",
+        # intermediate tier: Shorts get recompressed hard by YouTube anyway, so
+        # a fast preset keeps the companion render a small fraction of the mix's
+        # time. Honours the GPU encoder when one is active.
+        *_x264_encode_args(proxy=False, intermediate=True),
         "-pix_fmt", "yuv420p",
         "-c:a", "aac", "-b:a", "192k",
         "-movflags", "+faststart",
@@ -1152,7 +1252,7 @@ def _apply_branding(
             ass_path = Path(tmp) / "titles.ass"
             _write_title_ass(title_windows, ass_path, font[0], font[1])
             filters.append(
-                f"[{label}]ass=filename='{ass_path}':fontsdir='{font[0].parent}'[titled]"
+                f"[{label}]ass=filename='{_ff_filter_path(ass_path)}':fontsdir='{_ff_filter_path(font[0].parent)}'[titled]"
             )
             label = "titled"
 
@@ -1479,6 +1579,24 @@ def _concat_videos(parts: list[Path], out_path: Path, proxy: bool = False) -> No
         Path(list_path).unlink(missing_ok=True)
 
 
+def _clip_bar_seconds(clip: dict[str, Any], analysis: dict[str, Any]) -> float | None:
+    """Length of one bar (4 beats) for a clip, from the drop's MEASURED kick
+    period when available (the same source the renderer trusts over the global
+    BPM), else the track BPM. None if nothing usable. Used to re-clip drops to
+    a different bar count for the Short."""
+    kick = clip.get("kick_s")
+    if kick is not None:
+        for d in analysis.get("drops") or []:
+            if (
+                d.get("kick_period_s")
+                and d.get("kick_s") is not None
+                and abs(float(d["kick_s"]) - float(kick)) < 0.6
+            ):
+                return 4.0 * float(d["kick_period_s"])
+    src_bpm = float(analysis.get("bpm") or 0.0)
+    return 4.0 * 60.0 / src_bpm if src_bpm > 0 else None
+
+
 def render_mix(
     config: dict[str, Any],
     track_resolver: Callable[[str], Path],
@@ -1503,6 +1621,13 @@ def render_mix(
     brand_overlay = bool(config.get("brand_overlay", True))
     show_titles = bool(config.get("show_titles", True))
     title_font = resolve_title_font(config.get("title_font"))
+
+    # Resolve the video encoder for this render (GPU when available + requested,
+    # else CPU). Serialized renders => a module global is safe.
+    global _VIDEO_ENCODER
+    _VIDEO_ENCODER = _resolve_video_encoder(str(config.get("hw_accel", "auto")))
+    if _VIDEO_ENCODER != "libx264":
+        print(f"[encoder] using hardware encoder: {_VIDEO_ENCODER}")
 
     # When no_time_stretch is on, force the per-clip stretch ratio to 1.0.
     # Each clip plays at its native BPM (no setpts on video, no rubberband on
@@ -1965,6 +2090,29 @@ def render_mix(
         except Exception:
             pass
 
+    # Short-source mode: this render is an internal, un-branded raw mix built
+    # only to feed the vertical Short (see the make_short block below). Hand
+    # back the crossfaded video + mixed audio and STOP — no branding, intro,
+    # outro, export, verify, or DB record. The caller reframes these into the
+    # Short and cleans up `work`.
+    if bool(config.get("_short_source")):
+        import soundfile as sf
+        _lens = [
+            sf.info(str(p)).frames / sf.info(str(p)).samplerate for p in clip_audios
+        ]
+        return {
+            "_concat_video": str(concat_video),
+            "_final_audio": str(final_audio),
+            "_work": str(work),
+            "_lens": _lens,
+            "_crossfade_durations": [float(c) for c in crossfade_durations],
+            "_seam_infos": seam_infos,
+            "_titles": [
+                (clips[i].get("title") or _display_title(srcs[i]))
+                for i in range(len(srcs))
+            ],
+        }
+
     _check_cancel()
     EXPORTS_DIR.mkdir(parents=True, exist_ok=True)
     out_path = _export_path(clips, srcs, config)
@@ -2110,32 +2258,93 @@ def render_mix(
     if verification is not None:
         record["verification"] = verification
 
-    # Companion vertical Short reframing the mix itself (option: make_short).
+    # Companion vertical Short. By default it reframes the mix we just
+    # rendered (one render for both). If short_drop_bars is set and DIFFERS
+    # from the full drop length, build a separate Short-specific mix with
+    # shorter drops (re-clip + a recursive raw render) and reframe THAT.
     if bool(config.get("make_short", True)) and not proxy:
+        inner_work: Path | None = None
         try:
             import soundfile as sf
-            lens = [
-                sf.info(str(p)).frames / sf.info(str(p)).samplerate
-                for p in clip_audios
-            ]
-            mix_len = sum(lens) - sum(crossfade_durations)
-            titles = [
-                (clips[i].get("title") or _display_title(srcs[i]))
-                for i in range(len(srcs))
-            ]
-            spans = compute_title_windows(
-                lens, crossfade_durations, switch_at="end",
-                kick_offsets=[float(si.get("kick_offset") or 0.0) for si in seam_infos],
+
+            full_bars = float(config.get("drop_bars") or 0.0)
+            short_bars = float(config.get("short_drop_bars") or 0.0)
+            want_separate = (
+                short_bars > 0
+                and abs(short_bars - full_bars) > 1e-6
+                and all(c.get("kick_s") is not None for c in clips)
             )
-            short_windows = [(titles[i], s, e) for i, (s, e) in enumerate(spans)]
+
+            short_src_video = concat_video
+            short_src_audio = final_audio
+
+            if want_separate:
+                if progress:
+                    progress("render", 96.0, f"Rendering Short mix ({short_bars:g}-bar drops)")
+                short_clips = []
+                for i, c in enumerate(clips):
+                    nc = dict(c)
+                    bar = _clip_bar_seconds(c, analyses[i])
+                    kick = c.get("kick_s")
+                    if bar and kick is not None:
+                        nc["end_s"] = float(kick) + short_bars * bar
+                    short_clips.append(nc)
+                short_cfg = {
+                    **config,
+                    "clips": short_clips,
+                    "make_short": False,
+                    "brand_overlay": False,
+                    "show_titles": False,
+                    "intro_overlay": False,
+                    "outro_s": 0.0,
+                    "verify": False,
+                    "proxy": False,
+                    "drop_bars": short_bars,
+                    "short_drop_bars": 0.0,
+                    "_short_source": True,
+                }
+
+                def _short_prog(_st: str, pct: float, msg: str = "") -> None:
+                    if progress:
+                        progress("render", min(98.5, 96.0 + pct * 0.025), f"Short: {msg}")
+
+                res = render_mix(short_cfg, track_resolver, _short_prog, cancel)
+                short_src_video = Path(res["_concat_video"])
+                short_src_audio = Path(res["_final_audio"])
+                inner_work = Path(res["_work"])
+                s_lens = res["_lens"]
+                s_cf = res["_crossfade_durations"]
+                s_seam = res["_seam_infos"]
+                s_titles = res["_titles"]
+            else:
+                s_lens = [
+                    sf.info(str(p)).frames / sf.info(str(p)).samplerate
+                    for p in clip_audios
+                ]
+                s_cf = [float(c) for c in crossfade_durations]
+                s_seam = seam_infos
+                s_titles = [
+                    (clips[i].get("title") or _display_title(srcs[i]))
+                    for i in range(len(srcs))
+                ]
+
+            mix_len = sum(s_lens) - sum(s_cf)
+            spans = compute_title_windows(
+                s_lens, s_cf, switch_at="end",
+                kick_offsets=[float(si.get("kick_offset") or 0.0) for si in s_seam],
+            )
+            short_windows = [(s_titles[i], s, e) for i, (s, e) in enumerate(spans)]
             short_path = _render_short(
-                concat_video, final_audio, short_windows, mix_len,
+                short_src_video, short_src_audio, short_windows, mix_len,
                 out_path, work, progress, title_font=title_font,
             )
             if short_path is not None:
                 record["short_path"] = "videos/" + short_path.relative_to(VIDEOS_DIR).as_posix()
         except Exception as e:
             print(f"[short] failed, keeping the main mix: {e}")
+        finally:
+            if inner_work is not None:
+                shutil.rmtree(inner_work, ignore_errors=True)
 
     if progress:
         progress("render", 100.0, "Done")

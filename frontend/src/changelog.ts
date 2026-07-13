@@ -9,6 +9,21 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "0.12.0",
+    date: "2026-07-13",
+    title: "GPU rendering, punchier Shorts, and a Windows render fix",
+    items: [
+      "Renders can now use your GPU: a new Video encoder setting in Settings > Output uses NVIDIA, Intel, or AMD hardware when it is available and quietly falls back to CPU when it is not",
+      "The Short can have its own drop length: set Short drop length in Settings, and when it differs from the full video a separate punchier Short is rendered (4 bars by default against 8 for the full video). Leave it on Same as full video to keep a single render for both",
+      "Full video drop length and Short drop length are now separate settings, both editable in Settings > Mix",
+      "Each mix in the Mixes panel now has Full video and Short tabs, so you can play and download either version right there",
+      "Fixed rendering on Windows, where the title and branding step could fail and stop the whole render",
+      "New option to hide the Auto-Mix button in Settings > Interface, for when you prefer the Import and Choose workflow",
+      "The render window no longer runs off the screen when a mix finishes, it scrolls instead",
+      "A few settings return to their defaults after this update",
+    ],
+  },
+  {
     version: "0.11.0",
     date: "2026-07-06",
     title: "Every export gets its own tidy folder",

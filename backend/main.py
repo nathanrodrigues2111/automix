@@ -694,6 +694,13 @@ AUTOMIX_DEFAULT_CONFIG: dict[str, Any] = {
     "show_titles": True,
     # Companion vertical Short of the first drop, rendered next to the mix.
     "make_short": True,
+    # Drop length: full mix 8 bars, Short 4 bars (punchier). When they match,
+    # the Short reuses the full mix (one render); differing = a second, shorter
+    # Short-specific mix is rendered. 0 = auto.
+    "drop_bars": 8.0,
+    "short_drop_bars": 4.0,
+    # Video encoder: auto uses a working GPU encoder when present, else CPU.
+    "hw_accel": "auto",
     # Black + silence after the mix ends, for YouTube end screens (which
     # occupy the last 5-20s of a video).
     "outro_s": 10.0,

@@ -103,8 +103,13 @@ export interface RenderConfig {
   filename_style?: string
   /** Force every drop clip to N bars (0 = auto: detected drop body). */
   drop_bars?: number
+  /** Short's drop length in bars (0 = same as drop_bars, reuse the full mix).
+   *  When it differs, a separate shorter Short mix is rendered. */
+  short_drop_bars?: number
   /** Also render a vertical YouTube Short of the first drop. */
   make_short?: boolean
+  /** Video encoder: "auto" | "cpu" | "nvenc" | "qsv" | "amf" | "videotoolbox". */
+  hw_accel?: string
   harmonic_pitch_shift_max_semitones: number
   proxy?: boolean
 }

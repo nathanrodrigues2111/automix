@@ -90,6 +90,9 @@ class RenderRequest(BaseModel):
     filename_style: str = "file"  # "file" (source name + date) | "timestamp"
     drop_bars: float = 0.0  # force every drop clip to N bars (0 = auto)
     make_short: bool = True  # companion vertical Short of the first drop
+    short_drop_bars: float = 0.0  # Short's drop length (0 = same as drop_bars,
+    # i.e. reuse the full mix and render once; >0 = re-clip a separate Short mix)
+    hw_accel: str = "auto"  # video encoder: auto | cpu | nvenc | qsv | amf | videotoolbox
 
 
 class YouTubeImportRequest(BaseModel):

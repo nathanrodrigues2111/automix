@@ -42,6 +42,9 @@ export function MixesPanel({ progress }: MixesPanelProps) {
 
   const [open, setOpen] = useState(true)
   const [activeFile, setActiveFile] = useState<string | null>(null)
+  // Which variant the inline player shows for the active mix. Reset to "full"
+  // whenever a different mix is opened (mirrors the Render dialog's tabs).
+  const [activeVideo, setActiveVideo] = useState<"full" | "short">("full")
   const [confirmFile, setConfirmFile] = useState<string | null>(null)
   const confirmTimerRef = useRef<number | null>(null)
 
@@ -270,6 +273,14 @@ export function MixesPanel({ progress }: MixesPanelProps) {
                 const isActive = activeFile === m.filename
                 const isConfirming = confirmFile === m.filename
                 const isSelected = selected.has(m.filename)
+                const hasShort = !!m.short_path
+                // The variant currently shown for THIS row (only the active
+                // row honours the Full/Short toggle).
+                const showingShort =
+                  isActive && activeVideo === "short" && hasShort
+                const shownPath =
+                  showingShort && m.short_path ? m.short_path : m.path
+                const shownName = shownPath.split("/").pop() ?? m.filename
                 return (
                   <li
                     key={m.filename}
@@ -307,9 +318,14 @@ export function MixesPanel({ progress }: MixesPanelProps) {
                             isActive ? "Hide player" : `Play ${m.filename}`
                           }
                           title={isActive ? "Hide player" : "Play inline"}
-                          onClick={() =>
-                            setActiveFile(isActive ? null : m.filename)
-                          }
+                          onClick={() => {
+                            if (isActive) {
+                              setActiveFile(null)
+                            } else {
+                              setActiveFile(m.filename)
+                              setActiveVideo("full")
+                            }
+                          }}
                           className={cn(
                             "flex h-8 w-8 shrink-0 items-center justify-center rounded-md transition-colors focus-visible:outline-2 focus-visible:outline-ring",
                             isActive
@@ -334,10 +350,12 @@ export function MixesPanel({ progress }: MixesPanelProps) {
                           className="h-8 w-8 shrink-0 text-muted-foreground hover:text-foreground"
                         >
                           <a
-                            href={mediaUrl(m.path)}
-                            download={m.filename}
-                            title="Download"
-                            aria-label={`Download ${m.filename}`}
+                            href={mediaUrl(shownPath)}
+                            download={shownName}
+                            title={
+                              showingShort ? "Download Short" : "Download"
+                            }
+                            aria-label={`Download ${shownName}`}
                           >
                             <Download className="h-3.5 w-3.5" />
                           </a>
@@ -367,11 +385,39 @@ export function MixesPanel({ progress }: MixesPanelProps) {
                     )}
 
                     {isActive && !selectMode && (
-                      <div className="border-t border-border/60 p-2">
+                      <div className="space-y-2 border-t border-border/60 p-2">
+                        {hasShort && (
+                          <div className="grid grid-cols-2 gap-1 rounded-md bg-muted/50 p-1">
+                            {(
+                              [
+                                { key: "full", label: "Full video" },
+                                { key: "short", label: "Short" },
+                              ] as const
+                            ).map(({ key, label }) => (
+                              <button
+                                key={key}
+                                type="button"
+                                onClick={() => setActiveVideo(key)}
+                                className={cn(
+                                  "rounded px-2 py-1.5 text-xs font-medium transition-colors",
+                                  activeVideo === key
+                                    ? "bg-background text-foreground shadow-sm"
+                                    : "text-muted-foreground hover:text-foreground",
+                                )}
+                              >
+                                {label}
+                              </button>
+                            ))}
+                          </div>
+                        )}
                         <Player
-                          src={mediaUrl(m.path)}
-                          title={m.filename}
+                          key={shownPath}
+                          src={mediaUrl(shownPath)}
+                          title={shownName}
                           autoPlay
+                          className={
+                            showingShort ? "mx-auto max-w-[280px]" : undefined
+                          }
                         />
                       </div>
                     )}

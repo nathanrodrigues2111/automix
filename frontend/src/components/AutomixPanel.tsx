@@ -65,9 +65,17 @@ interface AutomixPanelProps {
   /** "card" renders the standalone panel; "header" renders a compact form
    *  row whose status (progress, log, result) floats in a dropdown below. */
   variant?: "card" | "header"
+  /** When true, hide the Auto-Mix action entirely (both the header button and
+   *  the one in the track chooser) — the playlist only feeds Import / Choose.
+   *  Off by default; toggled in Settings → Interface. */
+  hideAutomixButton?: boolean
 }
 
-export function AutomixPanel({ progress, variant = "card" }: AutomixPanelProps) {
+export function AutomixPanel({
+  progress,
+  variant = "card",
+  hideAutomixButton = false,
+}: AutomixPanelProps) {
   const compact = variant === "header"
   const qc = useQueryClient()
   const automix = useAutomix()
@@ -272,6 +280,9 @@ export function AutomixPanel({ progress, variant = "card" }: AutomixPanelProps) 
           )}
           onSubmit={(e) => {
             e.preventDefault()
+            // With the Auto-Mix button hidden, Enter must not silently kick
+            // off a full render — the visible actions are Import / Choose.
+            if (hideAutomixButton) return
             startAutomix()
           }}
         >
@@ -309,22 +320,24 @@ export function AutomixPanel({ progress, variant = "card" }: AutomixPanelProps) 
                 compact && "h-8 w-16 text-sm",
               )}
             />
-            <Button
-              type="submit"
-              disabled={running}
-              size={compact ? "sm" : "default"}
-              className={cn(
-                "shrink-0 bg-primary text-primary-foreground shadow-[0_0_18px_-4px_color-mix(in_oklch,var(--primary)_60%,transparent)] hover:bg-primary/90",
-                compact && "h-8",
-              )}
-            >
-              {running && job?.kind !== "import" ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <Wand2 className="h-4 w-4" />
-              )}
-              Auto-Mix
-            </Button>
+            {!hideAutomixButton && (
+              <Button
+                type="submit"
+                disabled={running}
+                size={compact ? "sm" : "default"}
+                className={cn(
+                  "shrink-0 bg-primary text-primary-foreground shadow-[0_0_18px_-4px_color-mix(in_oklch,var(--primary)_60%,transparent)] hover:bg-primary/90",
+                  compact && "h-8",
+                )}
+              >
+                {running && job?.kind !== "import" ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Wand2 className="h-4 w-4" />
+                )}
+                Auto-Mix
+              </Button>
+            )}
             <Button
               type="button"
               variant="outline"
@@ -451,15 +464,17 @@ export function AutomixPanel({ progress, variant = "card" }: AutomixPanelProps) 
             <Download className="h-3.5 w-3.5" /> Import{" "}
             {wholePlaylist ? "all" : selectedIds.size}
           </Button>
-          <Button
-            size="sm"
-            disabled={!wholePlaylist && selectedIds.size === 0}
-            onClick={() => startWithSelection("automix")}
-            className="bg-primary text-primary-foreground hover:bg-primary/90"
-          >
-            <Wand2 className="h-3.5 w-3.5" /> Auto-Mix{" "}
-            {wholePlaylist ? "all" : selectedIds.size}
-          </Button>
+          {!hideAutomixButton && (
+            <Button
+              size="sm"
+              disabled={!wholePlaylist && selectedIds.size === 0}
+              onClick={() => startWithSelection("automix")}
+              className="bg-primary text-primary-foreground hover:bg-primary/90"
+            >
+              <Wand2 className="h-3.5 w-3.5" /> Auto-Mix{" "}
+              {wholePlaylist ? "all" : selectedIds.size}
+            </Button>
+          )}
         </DialogFooter>
       </DialogContent>
     </Dialog>

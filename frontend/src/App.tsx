@@ -18,6 +18,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Separator } from "@/components/ui/separator"
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet"
 import { AutomixPanel } from "@/components/AutomixPanel"
+import { DesktopContextMenu } from "@/components/DesktopContextMenu"
 import { MixesPanel } from "@/components/MixesPanel"
 import { TrackList } from "@/components/TrackList"
 import { Timeline } from "@/components/Timeline"
@@ -99,11 +100,17 @@ const DEFAULT_CONFIG: Omit<RenderConfig, "clips"> = {
   brand_overlay: true, // EDMPAPA black bars + logo
   video_cut_fade: true, // quick 0.25s blend on each video cut
   show_titles: true, // per-track title overlay
-  title_font: "BebasNeue-Regular", // burned-in title font (see Settings)
+  title_font: "Cubano", // burned-in title font for the full video (see Settings)
   outro_s: 10, // black outro reserved for YouTube end screens
   resolution: "1080p", // final render canvas
   filename_style: "file", // exports named after the source video + date/time
   make_short: true, // companion vertical Short of the first drop
+  short_overlay: false, // EDMPAPA template on the Short (false = clean full-width, default)
+  short_title: "", // custom caption near the top of the Short (empty = none)
+  short_max_s: 0, // Short length in seconds (0 = full, up to the 1-minute cap)
+  short_font: "Cubano", // Short text font (full video uses title_font / Bebas)
+  short_only: false, // render only the vertical Short (skip the full video)
+  short_end_card: false, // "watch the full video" end card on the Short (off by default)
   drop_bars: 8, // full-mix drop length in bars (0 = auto detected body)
   short_drop_bars: 4, // Short drop length; differs from drop_bars = separate Short mix
   hw_accel: "auto", // GPU encoder when available, else CPU
@@ -184,7 +191,7 @@ function RefreshTitlesButton() {
 
 // v3: outro default changed to 10s. Bumping the key drops stale persisted
 // configs that would pin old defaults.
-const SETTINGS_KEY = "automix.settings.v4"
+const SETTINGS_KEY = "automix.settings.v5"
 
 interface StoredSettings {
   config?: Partial<Omit<RenderConfig, "clips">>
@@ -720,7 +727,7 @@ export default function App() {
       <header className="relative z-40 flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-b border-border/60 bg-gradient-to-b from-background to-background/60 px-6 py-3 backdrop-blur">
         <div className="flex shrink-0 items-center gap-3">
           <div className="flex h-8 w-8 items-center justify-center rounded-md bg-primary/15 ring-1 ring-primary/30">
-            <PlayCircleIcon className="h-4 w-4 text-primary" />
+            <PlayCircleIcon className="h-5 w-5 text-primary" />
           </div>
           <div className="flex items-baseline gap-2">
             <h1 className="bg-gradient-to-r from-foreground to-primary bg-clip-text text-lg font-semibold tracking-tight text-transparent">
@@ -1068,6 +1075,7 @@ export default function App() {
         />
       )}
 
+      <DesktopContextMenu />
       <SettingsDialog
         open={settingsOpen}
         onClose={() => setSettingsOpen(false)}
@@ -1078,6 +1086,11 @@ export default function App() {
         automixEnabled={automixEnabled}
         onAutomixEnabledChange={setAutomixEnabled}
         clipBpms={clipBpms}
+        onReset={() => {
+          setConfig({ ...DEFAULT_CONFIG })
+          setLoopPreviews(true)
+          setAutomixEnabled(false)
+        }}
         onStartTour={() => {
           setSettingsOpen(false)
           setTourStep(0)

@@ -27,6 +27,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { Progress } from "@/components/ui/progress"
+import { Input } from "@/components/ui/input"
 import { Player } from "@/components/Player"
 import { useCancelJob, useRender, useRevealFile, mediaUrl } from "@/api/client"
 import type { RenderConfig } from "@/api/types"
@@ -56,6 +57,8 @@ export function RenderDialog({
     config.resolution ?? "1080p",
   )
   const [activeVideo, setActiveVideo] = useState<"full" | "short">("full")
+  const [shortOnly, setShortOnly] = useState<boolean>(config.short_only ?? false)
+  const [shortTitle, setShortTitle] = useState<string>(config.short_title ?? "")
 
   // Reset job state when the dialog closes so reopening starts fresh.
   const handleClose = () => {
@@ -71,12 +74,23 @@ export function RenderDialog({
   // /api/render response (which only has the job_id).
   const outputPath = p?.output_path ?? null
   const shortPath = p?.short_path ?? null
-  const shownPath = activeVideo === "short" && shortPath ? shortPath : outputPath
+  // Short-only render: the backend points output_path at the _short.mp4, so the
+  // "Full video" tab would just play the Short. Hide it and force the short view.
+  const shortOnlyResult =
+    !!outputPath &&
+    !!shortPath &&
+    (outputPath === shortPath || outputPath.endsWith("_short.mp4"))
+  const shownPath = shortOnlyResult
+    ? shortPath
+    : activeVideo === "short" && shortPath
+      ? shortPath
+      : outputPath
+  const showShortView = shortOnlyResult || activeVideo === "short"
 
   const start = () => {
     const payload: RenderConfig = isPreview
       ? { ...config, proxy: true }
-      : { ...config, resolution }
+      : { ...config, resolution, short_only: shortOnly, short_title: shortTitle }
     render.mutate(payload, {
       onSuccess: (res) => {
         setJobId(res.job_id)
@@ -110,20 +124,43 @@ export function RenderDialog({
         </DialogHeader>
 
         {!jobId && !isPreview && (
-          <div className="flex items-center justify-between gap-3">
-            <span className="text-sm text-muted-foreground">Resolution</span>
-            <Select value={resolution} onValueChange={setResolution}>
-              <SelectTrigger className="h-8 w-40 text-xs">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="480p">480p</SelectItem>
-                <SelectItem value="720p">720p (HD)</SelectItem>
-                <SelectItem value="1080p">1080p (Full HD)</SelectItem>
-                <SelectItem value="1440p">1440p (2K)</SelectItem>
-                <SelectItem value="2160p">2160p (4K)</SelectItem>
-              </SelectContent>
-            </Select>
+          <div className="space-y-3">
+            <div className="flex items-center justify-between gap-3">
+              <span className="text-sm text-muted-foreground">Resolution</span>
+              <Select value={resolution} onValueChange={setResolution}>
+                <SelectTrigger className="h-8 w-40 text-xs">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="480p">480p</SelectItem>
+                  <SelectItem value="720p">720p (HD)</SelectItem>
+                  <SelectItem value="1080p">1080p (Full HD)</SelectItem>
+                  <SelectItem value="1440p">1440p (2K)</SelectItem>
+                  <SelectItem value="2160p">2160p (4K)</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <label className="flex cursor-pointer items-center justify-between gap-3">
+              <span className="text-sm text-muted-foreground">
+                Only render the Short
+              </span>
+              <input
+                type="checkbox"
+                className="h-4 w-4 shrink-0 accent-[var(--primary)]"
+                checked={shortOnly}
+                onChange={(e) => setShortOnly(e.target.checked)}
+              />
+            </label>
+            <div className="space-y-1.5">
+              <span className="text-sm text-muted-foreground">Short title</span>
+              <Input
+                value={shortTitle}
+                onChange={(e) => setShortTitle(e.target.value)}
+                placeholder="Optional caption for the Short"
+                aria-label="Short title caption"
+                className="h-8 text-sm"
+              />
+            </div>
           </div>
         )}
 
@@ -160,10 +197,10 @@ export function RenderDialog({
         )}
 
         {done && outputPath && shownPath && (
-          <div className="space-y-3 rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-3">
-            <div className="flex items-center justify-between gap-2">
-              <div className="flex items-center gap-2 text-sm font-medium text-emerald-600 dark:text-emerald-400">
-                <CheckCircle2 className="h-4 w-4" /> Render complete
+          <div className="min-w-0 space-y-3 rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-3">
+            <div className="flex min-w-0 items-center justify-between gap-2">
+              <div className="flex min-w-0 items-center gap-2 text-sm font-medium text-emerald-600 dark:text-emerald-400">
+                <CheckCircle2 className="h-4 w-4 shrink-0" /> Render complete
               </div>
               <div className="flex shrink-0 gap-1.5">
                 <Button
@@ -189,7 +226,7 @@ export function RenderDialog({
                 </Button>
               </div>
             </div>
-            {shortPath && (
+            {shortPath && !shortOnlyResult && (
               <div className="grid grid-cols-2 gap-1 rounded-md bg-muted/50 p-1">
                 {(
                   [
@@ -219,12 +256,12 @@ export function RenderDialog({
               title={shownPath.split("/").pop() ?? "Rendered mix"}
               autoPlay
               className={
-                activeVideo === "short"
-                  ? "mx-auto aspect-[9/16] h-[min(60vh,520px)] w-auto ring-emerald-500/25"
-                  : "ring-emerald-500/25"
+                showShortView
+                  ? "mx-auto aspect-[9/16] h-[min(60vh,520px)] w-auto max-w-full ring-emerald-500/25"
+                  : "max-w-full ring-emerald-500/25"
               }
             />
-            <div className="truncate font-mono text-[11px] text-muted-foreground">
+            <div className="min-w-0 truncate font-mono text-[11px] text-muted-foreground">
               {shownPath}
             </div>
           </div>

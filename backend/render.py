@@ -1015,84 +1015,9 @@ _SHORT_VID_Y = _SHORT_WIN_TOP + _SHORT_BAR_H  # 656
 
 _SHORT_END_CARD_S = 3.0
 _SHORT_END_CARD_TEXT = "WATCH THE FULL VIDEO LINKED BELOW"
-
-
-def _short_titles_ass(
-    windows: list[tuple[str, float, float]],
-    dur: float,
-    card_start: float,
-    out_ass: Path,
-    font_fam: str,
-) -> None:
-    """Per-drop centered lines: artist in the top bar, track name in the
-    bottom bar, switching with the mix's title windows; then the end-card
-    line centered on black. Titles render caps-only; long lines scale down
-    to stay inside the bar width."""
-    max_w = _SHORT_VID_W - 60
-
-    def _fs(text: str, base: int = 104) -> int:
-        if not text:
-            return base
-        return max(48, min(base, int(max_w / (0.5 * len(text)))))
-
-    def _ts(t: float) -> str:
-        t = max(0.0, t)
-        return f"{int(t // 3600)}:{int(t % 3600 // 60):02d}:{t % 60:05.2f}"
-
-    def _esc(text: str) -> str:
-        return text.strip().upper().replace("\\", "").replace("{", "(").replace("}", ")")
-
-    top_y = _SHORT_WIN_TOP + _SHORT_BAR_H // 2
-    bot_y = _SHORT_WIN_BOT - _SHORT_BAR_H // 2
-    lines = [
-        "[Script Info]",
-        "ScriptType: v4.00+",
-        f"PlayResX: {_SHORT_W}",
-        f"PlayResY: {_SHORT_H}",
-        "WrapStyle: 2",
-        "",
-        "[V4+ Styles]",
-        "Format: Name, Fontname, Fontsize, PrimaryColour, OutlineColour, "
-        "BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, "
-        "Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, "
-        "MarginR, MarginV, Encoding",
-        f"Style: Short,{font_fam},88,&H00FFFFFF,&H00000000,&H00000000,0,0,0,0,"
-        "100,100,1,0,1,0,0,5,10,10,10,1",
-        "",
-        "[Events]",
-        "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
-    ]
-    for title, s, e in windows:
-        if s >= card_start:
-            continue
-        e = min(e, card_start)
-        if " - " in title:
-            artist, track = title.split(" - ", 1)
-        else:
-            artist, track = "", title
-        for text, y in ((artist, top_y), (track, bot_y)):
-            txt = _esc(text)
-            if not txt:
-                continue
-            lines.append(
-                f"Dialogue: 0,{_ts(s)},{_ts(e)},Short,,0,0,0,,"
-                f"{{\\pos({_SHORT_W // 2},{y})\\fs{_fs(txt)}}}{txt}"
-            )
-    # End card: centered call-to-action on black (the template's wordmark
-    # and subscribe button stay blended over it).
-    # Two centered lines so the text can stay big; alignment 5 centers the
-    # whole block on the frame middle.
-    words = _esc(_SHORT_END_CARD_TEXT).split()
-    half = (len(words) + 1) // 2
-    card_lines = [" ".join(words[:half]), " ".join(words[half:])]
-    longest = max(len(ln) for ln in card_lines if ln) if any(card_lines) else 1
-    card_fs = max(56, min(92, int((_SHORT_W - 120) / (0.5 * longest))))
-    card = "\\N".join(ln for ln in card_lines if ln)
-    lines.append(
-        f"Dialogue: 0,{_ts(card_start)},{_ts(dur)},Short,,0,0,0,,"
-        f"{{\\pos({_SHORT_W // 2},{_SHORT_H // 2})\\fs{card_fs}}}{card}"
-    )
-    out_ass.write_text("\n".join(lines) + "\n", encoding="utf-8")
+# Keep the Short punchy: cap the mix content to a short teaser (the first
+# drop), then the end card. Total Short ~= this + _SHORT_END_CARD_S.
+_SHORT_MAX_CONTENT_S = 10.0
 
 
 def _render_short(
@@ -1104,55 +1029,164 @@ def _render_short(
     work: Path,
     progress: ProgressCb = None,
     title_font: tuple[Path, str] | None = None,
+    overlay: bool = True,
+    short_title: str = "",
+    max_content_s: float = _SHORT_MAX_CONTENT_S,
+    end_card: bool = False,
 ) -> Path | None:
     """Vertical Short reframing the rendered mix itself: the first minute of
-    the beat-matched mix (as many drops as fit), blurred + darkened behind a
-    centered inset video, artist/track bars switching per drop, and the
+    the beat-matched mix (as many drops as fit).
+
+    overlay=True (default): the branded look — video edge to edge with the
     edmpapa template (wordmark + lightning + subscribe) screen-blended over
-    everything. Returns the output path, or None (a failed Short never
-    kills the mix)."""
-    if not SHORT_TEMPLATE.exists():
+    everything and artist/track lines in the top/bottom bars.
+
+    overlay=False: a clean Short — the mix video scaled to FULL WIDTH and
+    centered on black (aspect intact, no template, no bars), with the same
+    per-drop titles burned in. Returns the output path, or None (a failed
+    Short never kills the mix)."""
+    if overlay and not SHORT_TEMPLATE.exists():
         print(f"[short] template missing: {SHORT_TEMPLATE}")
         return None
     if mix_len < 5.0:
         return None
-    # Mix content + end card together stay under the 1-minute Shorts cap.
-    card_start = min(mix_len, 59.5 - _SHORT_END_CARD_S)
-    dur = card_start + _SHORT_END_CARD_S
+    # Mix content (+ optional end card) stay under the 1-minute Shorts cap.
+    # max_content_s caps the teaser length (0 = full, up to the cap).
+    card_s = _SHORT_END_CARD_S if end_card else 0.0
+    full_cap = 59.5 - card_s
+    cap = max_content_s if max_content_s and max_content_s > 0 else full_cap
+    card_start = min(mix_len, cap, full_cap)
+    dur = card_start + card_s
+
+    # Shared end-of-video treatment: with the end card, fade to black and hold
+    # it under the card; without it, a short clean fade out at the very end.
+    if end_card:
+        vfade = (
+            f"fade=t=out:st={max(0.0, card_start - 0.35):.3f}:d=0.35,"
+            f"tpad=stop=-1:stop_mode=add:color=black,"
+        )
+    else:
+        vfade = f"fade=t=out:st={max(0.0, dur - 0.4):.3f}:d=0.4,"
 
     if progress:
         progress("render", 98.0, "Rendering Short")
 
     font = title_font or resolve_title_font(None)
-    fonts_dir = font[0].parent if font else FONTS_DIR
-    ass_path = work / "short_titles.ass"
-    _short_titles_ass(windows, dur, card_start, ass_path, font[1] if font else "Bebas Neue")
+    font_path = font[0] if font else (FONTS_DIR / "Cubano.ttf")
+    # Emoji font lives in ASSETS_DIR (not fonts/) so it stays out of the
+    # title-font picker. None if absent (captions then render without emoji).
+    emoji_font: Path | None = ASSETS_DIR / "NotoColorEmoji.ttf"
+    if not emoji_font.exists():
+        emoji_font = None
 
-    bar_bot_y = _SHORT_VID_Y + _SHORT_VID_H
     out_path = main_out.with_name(main_out.stem + "_short.mp4")
-    filt = (
-        # Plain black canvas; the centered drop video is the only picture.
-        f"color=black:s={_SHORT_W}x{_SHORT_H}:r=30[bg];"
-        f"[0:v]fps=30,scale={_SHORT_VID_W}:{_SHORT_VID_H}:force_original_aspect_ratio=increase,"
-        f"crop={_SHORT_VID_W}:{_SHORT_VID_H}[fg];"
-        f"[bg][fg]overlay={_SHORT_INSET_X}:{_SHORT_VID_Y}:shortest=1[comp];"
-        # Fade the whole picture to black for the end card (fade holds
-        # black), pad with black in case the mix is shorter than the card.
-        f"[comp]fade=t=out:st={max(0.0, card_start - 0.35):.3f}:d=0.35,"
-        f"tpad=stop=-1:stop_mode=add:color=black,"
-        f"drawbox=x={_SHORT_INSET_X}:y={_SHORT_WIN_TOP}:w={_SHORT_VID_W}:h={_SHORT_BAR_H}:color=black:t=fill,"
-        f"drawbox=x={_SHORT_INSET_X}:y={bar_bot_y}:w={_SHORT_VID_W}:h={_SHORT_BAR_H}:color=black:t=fill,"
-        f"ass=filename='{_ff_filter_path(ass_path)}':fontsdir='{_ff_filter_path(fonts_dir)}',setsar=1,format=gbrp[base];"
-        f"[1:v]fps=30,scale={_SHORT_W}:{_SHORT_H},setsar=1,format=gbrp[tpl];"
-        f"[base][tpl]blend=all_mode=screen,format=yuv420p[v];"
-        # Audio fades out into the card and pads silent underneath it.
-        f"[2:a]afade=t=out:st={max(0.0, card_start - 1.0):.3f}:d=1.0,apad[a]"
-    )
-    cmd = [
-        "ffmpeg", "-y",
-        "-t", f"{dur:.3f}", "-i", str(mix_video),
-        "-stream_loop", "-1", "-i", str(SHORT_TEMPLATE),
-        "-i", str(mix_audio_wav),
+    # In short-only mode the full-video mux (which normally creates this
+    # folder) is skipped, so make sure the export folder exists.
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # --- Captions as PNG overlays (rounded box + bold text + color emoji) -----
+    # libass can't draw rounded boxes or color emoji, so Pillow renders each
+    # caption line to a transparent PNG that we overlay over its time window.
+    import short_captions
+
+    cap_dir = work / "shortcaps"
+    caps: list[tuple[Path, int, int, float, float]] = []  # png, x, y, start, end
+
+    def _add_cap(text: str, fs: int, cy: int, s: float, e: float) -> None:
+        text = " ".join(text.split())
+        if not text or e <= s:
+            return
+        png = cap_dir / f"cap_{len(caps):02d}.png"
+        try:
+            w, h = short_captions.render_caption(
+                text, font_path, fs, png, emoji_font=emoji_font,
+                max_width=_SHORT_W - 40,
+            )
+        except Exception as ex:
+            print(f"[short] caption skipped ({text[:24]!r}): {ex}")
+            return
+        caps.append((png, (_SHORT_W - w) // 2, int(cy - h / 2), s, e))
+
+    # Custom heading near the top (whole content span), wrapped to fit.
+    if short_title.strip():
+        hlen = len(short_title.strip())
+        h_fs = 96 if hlen <= 20 else 84 if hlen <= 36 else 70 if hlen <= 60 else 60
+        try:
+            hlines = short_captions.wrap_text(short_title.strip(), h_fs, font_path, _SHORT_W - 150)
+        except Exception:
+            hlines = [short_title.strip()]
+        gap = int(h_fs * 1.72)
+        for i, ln in enumerate(hlines):
+            _add_cap(ln, h_fs, 300 + i * gap, 0.0, card_start)
+
+    # Per-drop track name (bottom); artist (top) only without a custom heading.
+    top_y = _SHORT_WIN_TOP + _SHORT_BAR_H // 2
+    bot_y = min(_SHORT_WIN_BOT - _SHORT_BAR_H // 2, _SHORT_VID_Y + _SHORT_VID_H + 96)
+    for title, s, e in windows:
+        if s >= card_start:
+            continue
+        e = min(e, card_start)
+        artist, track = (title.split(" - ", 1) if " - " in title else ("", title))
+        try:
+            t_fs = short_captions.fit_font_size(track, font_path, _SHORT_W - 150, base=90)
+        except Exception:
+            t_fs = 80
+        if not short_title.strip() and artist.strip():
+            _add_cap(artist, min(t_fs, 84), top_y, s, e)
+        _add_cap(track, t_fs, bot_y, s, e)
+
+    if end_card:
+        words = _SHORT_END_CARD_TEXT.split()
+        half = (len(words) + 1) // 2
+        for i, ln in enumerate([" ".join(words[:half]), " ".join(words[half:])]):
+            _add_cap(ln, 78, _SHORT_H // 2 - 70 + i * 150, card_start, dur)
+
+    # Base picture: branded template blend, or clean cover-fill.
+    a_in = 2 if overlay else 1
+    afade = f"[{a_in}:a]afade=t=out:st={max(0.0, card_start - 1.0):.3f}:d=1.0,apad[a]"
+    if overlay:
+        bar_bot_y = _SHORT_VID_Y + _SHORT_VID_H
+        base = (
+            f"color=black:s={_SHORT_W}x{_SHORT_H}:r=30[bg];"
+            f"[0:v]fps=30,scale={_SHORT_VID_W}:{_SHORT_VID_H}:force_original_aspect_ratio=increase,"
+            f"crop={_SHORT_VID_W}:{_SHORT_VID_H}[fg];"
+            f"[bg][fg]overlay={_SHORT_INSET_X}:{_SHORT_VID_Y}:shortest=1[comp];"
+            f"[comp]{vfade}"
+            f"drawbox=x={_SHORT_INSET_X}:y={_SHORT_WIN_TOP}:w={_SHORT_VID_W}:h={_SHORT_BAR_H}:color=black:t=fill,"
+            f"drawbox=x={_SHORT_INSET_X}:y={bar_bot_y}:w={_SHORT_VID_W}:h={_SHORT_BAR_H}:color=black:t=fill,"
+            f"setsar=1,format=gbrp[cbase];"
+            f"[1:v]fps=30,scale={_SHORT_W}:{_SHORT_H},setsar=1,format=gbrp[tpl];"
+            f"[cbase][tpl]blend=all_mode=screen,format=yuv420p[vbase];"
+        )
+        base_inputs = 3
+        inputs = ["-t", f"{dur:.3f}", "-i", str(mix_video),
+                  "-stream_loop", "-1", "-i", str(SHORT_TEMPLATE),
+                  "-i", str(mix_audio_wav)]
+    else:
+        base = (
+            f"[0:v]fps=30,scale={_SHORT_W}:{_SHORT_H}:force_original_aspect_ratio=increase,"
+            f"crop={_SHORT_W}:{_SHORT_H},setsar=1[comp];"
+            f"[comp]{vfade}format=yuv420p[vbase];"
+        )
+        base_inputs = 2
+        inputs = ["-t", f"{dur:.3f}", "-i", str(mix_video),
+                  "-i", str(mix_audio_wav)]
+
+    parts = [base]
+    cur = "vbase"
+    cap_inputs: list[str] = []
+    for k, (png, x, y, s, e) in enumerate(caps):
+        cap_inputs += ["-i", str(png)]
+        nxt = f"v{k}"
+        parts.append(
+            f"[{cur}][{base_inputs + k}:v]overlay={x}:{y}:"
+            f"enable='between(t,{s:.3f},{e:.3f})'[{nxt}];"
+        )
+        cur = nxt
+    parts.append(f"[{cur}]null[v];{afade}")
+    filt = "".join(parts)
+
+    cmd = ["ffmpeg", "-y", *inputs, *cap_inputs,
         "-filter_complex", filt,
         "-map", "[v]", "-map", "[a]",
         "-t", f"{dur:.3f}",
@@ -1166,7 +1200,9 @@ def _render_short(
         str(out_path),
     ]
     subprocess.run(cmd, check=True, capture_output=True)
-    print(f"[short] wrote {out_path.name} ({card_start:.1f}s of the mix + end card)")
+    print(f"[short] wrote {out_path.name} ({card_start:.1f}s of the mix"
+          f"{' + end card' if end_card else ''}, {'branded' if overlay else 'clean'}, "
+          f"{len(caps)} captions)")
     return out_path
 
 
@@ -1628,6 +1664,10 @@ def render_mix(
     _VIDEO_ENCODER = _resolve_video_encoder(str(config.get("hw_accel", "auto")))
     if _VIDEO_ENCODER != "libx264":
         print(f"[encoder] using hardware encoder: {_VIDEO_ENCODER}")
+
+    # Short-only: skip the full video's finishing (branding, intro, outro, mux,
+    # verify, DB record) and deliver just the vertical Short.
+    short_only = bool(config.get("short_only")) and not proxy
 
     # When no_time_stretch is on, force the per-clip stretch ratio to 1.0.
     # Each clip plays at its native BPM (no setpts on video, no rubberband on
@@ -2130,7 +2170,7 @@ def render_mix(
     # risked dropping the AAC edit list — that shifted the whole track one
     # AAC frame (~23ms) late and pushed every seam out of the perfect band.
     video_final = concat_video
-    if brand_overlay:
+    if brand_overlay and not short_only:
         if progress:
             progress("render", 95.0, "Applying EDMPAPA branding")
         if show_titles:
@@ -2169,25 +2209,26 @@ def render_mix(
         )
         video_final = branded
 
-    if intro_dur > 0 and first_kick_out > 0:
+    if intro_dur > 0 and first_kick_out > 0 and not short_only:
         if progress:
             progress("render", 97.0, "Compositing intro overlay")
         _overlay_intro(video_final, intro_path, first_kick_out, intro_dur, work, proxy)
 
-    if outro_s > 0:
+    if outro_s > 0 and not short_only:
         if progress:
             progress("render", 97.5, "Appending YouTube outro")
         _append_black_outro(video_final, outro_s, work)
 
-    _check_cancel()
-    if progress:
-        progress("render", 98.0, "Muxing")
-    _mux_video_audio(video_final, final_audio, out_path)
+    if not short_only:
+        _check_cancel()
+        if progress:
+            progress("render", 98.0, "Muxing")
+        _mux_video_audio(video_final, final_audio, out_path)
 
     # Verify guard: measure the ACTUAL output (seam phase, loudness, true
     # peak, rendered titles) so a bad mix can never silently look done.
     verification: dict[str, Any] | None = None
-    if bool(config.get("verify", True)):
+    if bool(config.get("verify", True)) and not short_only:
         if progress:
             progress("render", 99.0, "Verifying mix (seams, loudness, titles)")
         try:
@@ -2248,29 +2289,33 @@ def render_mix(
             verification = {"passed": False, "problems": [f"verifier crashed: {e}"]}
 
     render_id = uuid.uuid4().hex
-    record = db.add_render(render_id, "videos/" + out_path.relative_to(VIDEOS_DIR).as_posix(), config)
-    # Seam moments (each incoming drop's kick) on the final timeline — the
-    # fade END of each transition. Useful for verification and UI markers.
-    try:
-        import soundfile as sf
-        lens = [sf.info(str(p)).frames / sf.info(str(p)).samplerate for p in clip_audios]
-        seams = []
-        cursor = lens[0]
-        for i in range(1, len(lens)):
-            seams.append(cursor)
-            cursor = cursor + lens[i] - crossfade_durations[i - 1]
-        record["seam_times"] = seams
-        record["crossfades"] = [float(c) for c in crossfade_durations]
-    except Exception:
-        record["seam_times"] = []
-    if verification is not None:
-        record["verification"] = verification
+    if short_only:
+        # No full video was rendered; the Short below is the whole deliverable.
+        record: dict[str, Any] = {"id": render_id, "config": config, "output_path": None}
+    else:
+        record = db.add_render(render_id, "videos/" + out_path.relative_to(VIDEOS_DIR).as_posix(), config)
+        # Seam moments (each incoming drop's kick) on the final timeline — the
+        # fade END of each transition. Useful for verification and UI markers.
+        try:
+            import soundfile as sf
+            lens = [sf.info(str(p)).frames / sf.info(str(p)).samplerate for p in clip_audios]
+            seams = []
+            cursor = lens[0]
+            for i in range(1, len(lens)):
+                seams.append(cursor)
+                cursor = cursor + lens[i] - crossfade_durations[i - 1]
+            record["seam_times"] = seams
+            record["crossfades"] = [float(c) for c in crossfade_durations]
+        except Exception:
+            record["seam_times"] = []
+        if verification is not None:
+            record["verification"] = verification
 
     # Companion vertical Short. By default it reframes the mix we just
     # rendered (one render for both). If short_drop_bars is set and DIFFERS
     # from the full drop length, build a separate Short-specific mix with
     # shorter drops (re-clip + a recursive raw render) and reframe THAT.
-    if bool(config.get("make_short", True)) and not proxy:
+    if (bool(config.get("make_short", True)) or short_only) and not proxy:
         inner_work: Path | None = None
         try:
             import soundfile as sf
@@ -2342,12 +2387,25 @@ def render_mix(
                 kick_offsets=[float(si.get("kick_offset") or 0.0) for si in s_seam],
             )
             short_windows = [(s_titles[i], s, e) for i, (s, e) in enumerate(spans)]
+            # Shorts can use their own font (default Cubano); fall back to the
+            # main title font when unset.
+            short_font = resolve_title_font(
+                config.get("short_font") or config.get("title_font")
+            )
             short_path = _render_short(
                 short_src_video, short_src_audio, short_windows, mix_len,
-                out_path, work, progress, title_font=title_font,
+                out_path, work, progress, title_font=short_font,
+                overlay=bool(config.get("short_overlay", True)),
+                short_title=str(config.get("short_title") or ""),
+                max_content_s=float(config.get("short_max_s", 0.0) or 0.0),
+                end_card=bool(config.get("short_end_card", False)),
             )
             if short_path is not None:
                 record["short_path"] = "videos/" + short_path.relative_to(VIDEOS_DIR).as_posix()
+                # Short-only: the Short is the deliverable, so it drives the
+                # job's output_path / done preview.
+                if short_only:
+                    record["output_path"] = record["short_path"]
         except Exception as e:
             print(f"[short] failed, keeping the main mix: {e}")
         finally:

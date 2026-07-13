@@ -740,8 +740,21 @@ AUTOMIX_DEFAULT_CONFIG: dict[str, Any] = {
     "harmonic_pitch_shift_max_semitones": 0,
     "brand_overlay": True,
     "show_titles": True,
+    # Full-video title font (Cubano by default; overridable in Settings).
+    "title_font": "Cubano",
     # Companion vertical Short of the first drop, rendered next to the mix.
     "make_short": True,
+    # EDMPAPA template overlay on the Short (False = clean full-width Short).
+    "short_overlay": False,
+    # Custom Short caption and teaser length (0 = full, up to the 1-min cap).
+    "short_title": "",
+    "short_max_s": 0.0,
+    # Short text font (default Cubano; the full video uses Bebas Neue).
+    "short_font": "Cubano",
+    # Render only the vertical Short (skip the full video) when True.
+    "short_only": False,
+    # "Watch the full video" end card on the Short (off by default).
+    "short_end_card": False,
     # Drop length: full mix 8 bars, Short 4 bars (punchier). When they match,
     # the Short reuses the full mix (one render); differing = a second, shorter
     # Short-specific mix is rendered. 0 = auto.
@@ -1076,21 +1089,30 @@ async def list_mixes() -> list[dict]:
         # Renders now live in per-title folders (exports/<title>/automix_*.mp4);
         # rglob also picks up any legacy loose files. One entry per full mix —
         # the Short is folded in as short_path, not listed separately.
-        seen = sorted(
-            (p for p in EXPORTS_DIR.rglob("automix_*.mp4") if not p.name.endswith("_short.mp4")),
-            key=lambda x: x.stat().st_mtime,
-            reverse=True,
-        )
-        for p in seen:
+        all_mp4 = list(EXPORTS_DIR.rglob("automix_*.mp4"))
+        fulls = [p for p in all_mp4 if not p.name.endswith("_short.mp4")]
+        full_set = set(fulls)
+        # Short-only renders leave just a *_short.mp4 with no full video; list
+        # those on their own so they still show up in the library.
+        entries = list(fulls)
+        for sp in all_mp4:
+            if not sp.name.endswith("_short.mp4"):
+                continue
+            base = sp.with_name(sp.name[: -len("_short.mp4")] + ".mp4")
+            if base not in full_set:
+                entries.append(sp)
+        entries.sort(key=lambda x: x.stat().st_mtime, reverse=True)
+        for p in entries:
             st = p.stat()
-            short = p.with_name(f"{p.stem}_short.mp4")
+            is_short = p.name.endswith("_short.mp4")
+            short = None if is_short else p.with_name(f"{p.stem}_short.mp4")
             out.append(
                 {
                     "filename": p.name,
                     "path": f"videos/{p.relative_to(VIDEOS_DIR).as_posix()}",
                     "short_path": (
                         f"videos/{short.relative_to(VIDEOS_DIR).as_posix()}"
-                        if short.exists()
+                        if short is not None and short.exists()
                         else None
                     ),
                     "size_bytes": st.st_size,

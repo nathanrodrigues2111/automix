@@ -15,6 +15,7 @@ DefaultDirName={autopf}\Automix
 DefaultGroupName=Automix
 DisableProgramGroupPage=yes
 UninstallDisplayIcon={app}\Automix.exe
+SetupIconFile=packaging\icon.ico
 SourceDir=..
 OutputDir=.
 OutputBaseFilename=Automix-windows-x64-setup

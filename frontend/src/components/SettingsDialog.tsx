@@ -54,6 +54,7 @@ interface SettingsDialogProps {
   /** BPMs of the clips currently in the mix, in order — used by the
    *  "first"/"median" target-BPM modes. */
   clipBpms: number[]
+  onReset?: () => void
   onStartTour?: () => void
 }
 
@@ -67,10 +68,42 @@ export function SettingsDialog({
   automixEnabled,
   onAutomixEnabledChange,
   clipBpms,
+  onReset,
   onStartTour,
 }: SettingsDialogProps) {
   const [bpmMode, setBpmMode] = useState<BpmMode>("first")
   const themePref = useThemePref()
+  const [confirmReset, setConfirmReset] = useState(false)
+  const resetTimer = useRef<number | null>(null)
+
+  const handleReset = () => {
+    if (!confirmReset) {
+      setConfirmReset(true)
+      if (resetTimer.current) window.clearTimeout(resetTimer.current)
+      resetTimer.current = window.setTimeout(() => setConfirmReset(false), 3000)
+      return
+    }
+    if (resetTimer.current) window.clearTimeout(resetTimer.current)
+    setConfirmReset(false)
+    onReset?.()
+    toast.success("Settings reset to defaults")
+  }
+
+  const openDevTools = () => {
+    // pywebview may expose an API to open the inspector; otherwise F12 works in
+    // the packaged app (debug build) and natively in the browser.
+    const pw = (window as unknown as { pywebview?: { api?: Record<string, unknown> } }).pywebview
+    const fn = pw?.api?.open_devtools
+    if (typeof fn === "function") {
+      try {
+        ;(fn as () => void)()
+        return
+      } catch {
+        // fall through to the hint
+      }
+    }
+    toast.info("Press F12 to open the developer console")
+  }
 
   const recomputeTargetBpm = (mode: BpmMode) => {
     if (mode === "manual" || clipBpms.length === 0) return
@@ -313,34 +346,6 @@ export function SettingsDialog({
               </p>
             </div>
 
-            <div className="space-y-3">
-              <Label className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
-                Short drop length
-              </Label>
-              <Select
-                value={String(config.short_drop_bars ?? 0)}
-                onValueChange={(v) =>
-                  setConfig({ ...config, short_drop_bars: parseInt(v, 10) })
-                }
-              >
-                <SelectTrigger className="bg-background/60 text-xs">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="0">Same as full video</SelectItem>
-                  <SelectItem value="2">2 bars</SelectItem>
-                  <SelectItem value="4">4 bars</SelectItem>
-                  <SelectItem value="8">8 bars</SelectItem>
-                  <SelectItem value="12">12 bars</SelectItem>
-                </SelectContent>
-              </Select>
-              <p className="text-[11px] leading-relaxed text-muted-foreground">
-                Drop length for the vertical Short. When it differs from the
-                full video, a separate shorter Short is rendered (adds render
-                time). Same as full video keeps one render for both.
-              </p>
-            </div>
-
             <SliderRow
               label="Crossfade"
               valueText={`${config.crossfade_bars.toFixed(2)} bars`}
@@ -556,12 +561,6 @@ export function SettingsDialog({
               checked={config.show_titles ?? true}
               onChange={(v) => setConfig({ ...config, show_titles: v })}
             />
-            <SwitchRow
-              title="YouTube Short"
-              description="Also render a vertical Short of the first drop with the EDMPAPA template"
-              checked={config.make_short ?? true}
-              onChange={(v) => setConfig({ ...config, make_short: v })}
-            />
 
             <div className="space-y-3">
               <Label className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
@@ -587,6 +586,140 @@ export function SettingsDialog({
                 Auto uses your GPU when a working hardware encoder is found and
                 falls back to CPU otherwise. A specific choice that is not
                 available on this machine also falls back to CPU.
+              </p>
+            </div>
+          </section>
+
+          <Separator className="bg-border/50" />
+
+          <section className="space-y-3">
+            <SectionLabel>Shorts</SectionLabel>
+            <SwitchRow
+              title="Make a Short"
+              description="Also render a vertical YouTube Short alongside the full video"
+              checked={config.make_short ?? true}
+              onChange={(v) => setConfig({ ...config, make_short: v })}
+            />
+            <SwitchRow
+              title="Only render the Short"
+              description="Skip the full video and produce just the vertical Short (much faster)"
+              checked={config.short_only ?? false}
+              onChange={(v) => setConfig({ ...config, short_only: v })}
+            />
+            <SwitchRow
+              title="Short end card"
+              description="Show a 'watch the full video' card at the end of the Short"
+              checked={config.short_end_card ?? false}
+              onChange={(v) => setConfig({ ...config, short_end_card: v })}
+            />
+            <SwitchRow
+              title="EDMPAPA overlay"
+              description="Show the EDMPAPA template on the Short. Off makes a clean full-width Short with just the titles"
+              checked={config.short_overlay ?? true}
+              onChange={(v) => setConfig({ ...config, short_overlay: v })}
+            />
+
+            <div className="space-y-3">
+              <Label className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+                Short title
+              </Label>
+              <Input
+                value={config.short_title ?? ""}
+                onChange={(e) =>
+                  setConfig({ ...config, short_title: e.target.value })
+                }
+                placeholder="e.g. When the entire arena sings your tune"
+                aria-label="Short title caption"
+                className="bg-background/60 text-sm"
+              />
+              <p className="text-[11px] leading-relaxed text-muted-foreground">
+                A caption burned near the top of the Short in a bold boxed
+                style. Leave empty for none.
+              </p>
+            </div>
+
+            <div className="space-y-3">
+              <Label className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+                Short length
+              </Label>
+              <Select
+                value={String(config.short_max_s ?? 0)}
+                onValueChange={(v) =>
+                  setConfig({ ...config, short_max_s: parseInt(v, 10) })
+                }
+              >
+                <SelectTrigger className="bg-background/60 text-xs">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="5">5 seconds</SelectItem>
+                  <SelectItem value="8">8 seconds</SelectItem>
+                  <SelectItem value="10">10 seconds</SelectItem>
+                  <SelectItem value="15">15 seconds</SelectItem>
+                  <SelectItem value="0">Full (up to 1 minute)</SelectItem>
+                </SelectContent>
+              </Select>
+              <p className="text-[11px] leading-relaxed text-muted-foreground">
+                How much of the mix the Short teases before the end card.
+              </p>
+            </div>
+
+            <div className="space-y-3">
+              <Label className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+                Short drop length
+              </Label>
+              <Select
+                value={String(config.short_drop_bars ?? 0)}
+                onValueChange={(v) =>
+                  setConfig({ ...config, short_drop_bars: parseInt(v, 10) })
+                }
+              >
+                <SelectTrigger className="bg-background/60 text-xs">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="0">Same as full video</SelectItem>
+                  <SelectItem value="2">2 bars</SelectItem>
+                  <SelectItem value="4">4 bars</SelectItem>
+                  <SelectItem value="8">8 bars</SelectItem>
+                  <SelectItem value="12">12 bars</SelectItem>
+                </SelectContent>
+              </Select>
+              <p className="text-[11px] leading-relaxed text-muted-foreground">
+                When it differs from the full video, a separate shorter Short is
+                rendered (adds render time). Same keeps one render for both.
+              </p>
+            </div>
+
+            <div className="space-y-3">
+              <Label className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+                Short font
+              </Label>
+              <Select
+                value={config.short_font ?? "same"}
+                onValueChange={(v) =>
+                  setConfig({ ...config, short_font: v === "same" ? null : v })
+                }
+              >
+                <SelectTrigger className="bg-background/60 text-xs">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="same">Same as video title font</SelectItem>
+                  {(fonts.data?.fonts ?? []).map((f) => (
+                    <SelectItem
+                      key={f.id}
+                      value={f.id}
+                      style={{ fontFamily: `'${f.family}', sans-serif` }}
+                    >
+                      {f.family}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-[11px] leading-relaxed text-muted-foreground">
+                Font for the Short's title and captions. Defaults to Cubano so
+                Shorts can look different from the full video.
               </p>
             </div>
           </section>
@@ -719,6 +852,44 @@ export function SettingsDialog({
                 onClick={() => setChangelogOpen(true)}
               >
                 View changelog
+              </Button>
+            </div>
+          </section>
+
+          <Separator className="bg-border/50" />
+
+          <section className="space-y-3">
+            <SectionLabel>Debug</SectionLabel>
+            <div className="flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <div className="text-sm font-medium">Developer console</div>
+                <div className="text-[11px] leading-relaxed text-muted-foreground">
+                  Open the console to see logs and errors. F12 works too.
+                </div>
+              </div>
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-7 shrink-0 text-xs"
+                onClick={openDevTools}
+              >
+                Open console
+              </Button>
+            </div>
+            <div className="flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <div className="text-sm font-medium">Reset settings</div>
+                <div className="text-[11px] leading-relaxed text-muted-foreground">
+                  Restore every setting on this page to its default.
+                </div>
+              </div>
+              <Button
+                variant={confirmReset ? "destructive" : "outline"}
+                size="sm"
+                className="h-7 shrink-0 text-xs"
+                onClick={handleReset}
+              >
+                {confirmReset ? "Click to confirm" : "Reset to defaults"}
               </Button>
             </div>
           </section>

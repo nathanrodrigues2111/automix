@@ -90,6 +90,12 @@ class RenderRequest(BaseModel):
     filename_style: str = "file"  # "file" (source name + date) | "timestamp"
     drop_bars: float = 0.0  # force every drop clip to N bars (0 = auto)
     make_short: bool = True  # companion vertical Short of the first drop
+    short_overlay: bool = False  # EDMPAPA template on the Short; False = clean full-width Short (default)
+    short_title: str = ""  # custom caption burned near the top of the Short (empty = none)
+    short_max_s: float = 0.0  # Short length in seconds (0 = full, up to the 1-min cap)
+    short_font: str | None = None  # font id for the Short's text (null = same as title_font)
+    short_only: bool = False  # render ONLY the vertical Short (skip the full video)
+    short_end_card: bool = False  # show the "watch the full video" end card on the Short
     short_drop_bars: float = 0.0  # Short's drop length (0 = same as drop_bars,
     # i.e. reuse the full mix and render once; >0 = re-clip a separate Short mix)
     hw_accel: str = "auto"  # video encoder: auto | cpu | nvenc | qsv | amf | videotoolbox

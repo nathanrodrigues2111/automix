@@ -108,6 +108,18 @@ export interface RenderConfig {
   short_drop_bars?: number
   /** Also render a vertical YouTube Short of the first drop. */
   make_short?: boolean
+  /** EDMPAPA template overlay on the Short; false = clean full-width Short. */
+  short_overlay?: boolean
+  /** Custom caption burned near the top of the Short (empty = none). */
+  short_title?: string
+  /** Short teaser length in seconds (0 = full, up to the 1-minute cap). */
+  short_max_s?: number
+  /** Font id for the Short's text (null/empty = same as title_font). */
+  short_font?: string | null
+  /** Render ONLY the vertical Short (skip the full video). */
+  short_only?: boolean
+  /** Show the "watch the full video" end card on the Short. */
+  short_end_card?: boolean
   /** Video encoder: "auto" | "cpu" | "nvenc" | "qsv" | "amf" | "videotoolbox". */
   hw_accel?: string
   harmonic_pitch_shift_max_semitones: number

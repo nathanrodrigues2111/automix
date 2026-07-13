@@ -130,6 +130,49 @@
   animation: sheet-out-right 0.2s ease-in forwards;
 }
 
+/* Dialog open/close animation. Tailwind v4 has no tailwindcss-animate plugin
+   here, so the motion is defined in plain CSS keyed to Radix's data-state.
+   Defining an animation on [data-state="closed"] also makes Radix keep the
+   element mounted until the exit animation finishes. */
+@keyframes automix-overlay-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes automix-overlay-out {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+/* Centering is done by Tailwind's `translate: -50% -50%` (a separate CSS
+   property in v4), so these keyframes must only touch `transform` (scale + a
+   small rise) — putting -50% here too would stack with `translate` and fling
+   the dialog to the corner mid-animation. */
+@keyframes automix-content-in {
+  from { opacity: 0; transform: translateY(10px) scale(0.96); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+@keyframes automix-content-out {
+  from { opacity: 1; transform: translateY(0) scale(1); }
+  to { opacity: 0; transform: translateY(6px) scale(0.97); }
+}
+.automix-dialog-overlay[data-state="open"] {
+  animation: automix-overlay-in 0.28s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.automix-dialog-overlay[data-state="closed"] {
+  animation: automix-overlay-out 0.18s ease-in forwards;
+}
+.automix-dialog-content[data-state="open"] {
+  animation: automix-content-in 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.automix-dialog-content[data-state="closed"] {
+  animation: automix-content-out 0.2s ease-in forwards;
+}
+@media (prefers-reduced-motion: reduce) {
+  .automix-dialog-overlay[data-state],
+  .automix-dialog-content[data-state] {
+    animation-duration: 0.01ms;
+  }
+}
+
 /* Vidstack player — wire the chrome to the app's EDM accent. */
 .automix-player {
   --media-brand: var(--primary);

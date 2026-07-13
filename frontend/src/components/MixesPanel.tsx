@@ -274,12 +274,22 @@ export function MixesPanel({ progress }: MixesPanelProps) {
                 const isConfirming = confirmFile === m.filename
                 const isSelected = selected.has(m.filename)
                 const hasShort = !!m.short_path
+                // A short-only export IS the vertical Short (m.path ends in
+                // _short.mp4, no companion full video) — no toggle, always play
+                // it with the vertical treatment.
+                const isShortOnlyMix = m.path.endsWith("_short.mp4")
+                // Only offer the Full/Short toggle when there's a real full
+                // video AND a companion short.
+                const showToggle = hasShort && !isShortOnlyMix
                 // The variant currently shown for THIS row (only the active
                 // row honours the Full/Short toggle).
                 const showingShort =
-                  isActive && activeVideo === "short" && hasShort
+                  isActive && activeVideo === "short" && showToggle
                 const shownPath =
                   showingShort && m.short_path ? m.short_path : m.path
+                // Vertical 9:16 player styling: when viewing the companion
+                // short, or when the mix itself is short-only.
+                const verticalShort = showingShort || isShortOnlyMix
                 const shownName = shownPath.split("/").pop() ?? m.filename
                 return (
                   <li
@@ -386,7 +396,7 @@ export function MixesPanel({ progress }: MixesPanelProps) {
 
                     {isActive && !selectMode && (
                       <div className="space-y-2 border-t border-border/60 p-2">
-                        {hasShort && (
+                        {showToggle && (
                           <div className="grid grid-cols-2 gap-1 rounded-md bg-muted/50 p-1">
                             {(
                               [
@@ -416,7 +426,7 @@ export function MixesPanel({ progress }: MixesPanelProps) {
                           title={shownName}
                           autoPlay
                           className={
-                            showingShort
+                            verticalShort
                               ? "mx-auto aspect-[9/16] h-[min(70vh,640px)] w-auto"
                               : undefined
                           }

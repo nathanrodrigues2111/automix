@@ -120,6 +120,8 @@ export interface RenderConfig {
   short_only?: boolean
   /** Show the "watch the full video" end card on the Short. */
   short_end_card?: boolean
+  /** Show the artist name above the track name on the Short (off = track only). */
+  short_show_artist?: boolean
   /** Video encoder: "auto" | "cpu" | "nvenc" | "qsv" | "amf" | "videotoolbox". */
   hw_accel?: string
   harmonic_pitch_shift_max_semitones: number

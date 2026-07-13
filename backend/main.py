@@ -755,6 +755,8 @@ AUTOMIX_DEFAULT_CONFIG: dict[str, Any] = {
     "short_only": False,
     # "Watch the full video" end card on the Short (off by default).
     "short_end_card": False,
+    # Show the artist name above the track on the Short (off = track only).
+    "short_show_artist": False,
     # Drop length: full mix 8 bars, Short 4 bars (punchier). When they match,
     # the Short reuses the full mix (one render); differing = a second, shorter
     # Short-specific mix is rendered. 0 = auto.

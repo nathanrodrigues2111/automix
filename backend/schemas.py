@@ -96,6 +96,7 @@ class RenderRequest(BaseModel):
     short_font: str | None = None  # font id for the Short's text (null = same as title_font)
     short_only: bool = False  # render ONLY the vertical Short (skip the full video)
     short_end_card: bool = False  # show the "watch the full video" end card on the Short
+    short_show_artist: bool = False  # show the artist name above the track on the Short
     short_drop_bars: float = 0.0  # Short's drop length (0 = same as drop_bars,
     # i.e. reuse the full mix and render once; >0 = re-clip a separate Short mix)
     hw_accel: str = "auto"  # video encoder: auto | cpu | nvenc | qsv | amf | videotoolbox

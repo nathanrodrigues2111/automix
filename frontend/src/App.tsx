@@ -110,6 +110,7 @@ const DEFAULT_CONFIG: Omit<RenderConfig, "clips"> = {
   short_max_s: 0, // Short length in seconds (0 = full, up to the 1-minute cap)
   short_font: "Cubano", // Short text font (full video uses title_font / Bebas)
   short_only: false, // render only the vertical Short (skip the full video)
+  short_show_artist: false, // show artist above track on the Short (off = track only)
   short_end_card: false, // "watch the full video" end card on the Short (off by default)
   drop_bars: 8, // full-mix drop length in bars (0 = auto detected body)
   short_drop_bars: 4, // Short drop length; differs from drop_bars = separate Short mix

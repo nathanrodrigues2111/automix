@@ -101,38 +101,46 @@ def render_block(
     if not prepared:
         prepared = [(48, ImageFont.truetype(str(font_path), 48), [], 0, 48)]
 
-    # Corner radius drives the padding: content must sit clear of the rounded
-    # corners or glyphs at the edges (esp. wide emoji) get clipped by the arc.
-    radius0 = int(max_fs * 0.42)
-    padx = radius0 + int(max_fs * 0.16)  # clears the corner, but hugs tighter
-    pady = int(max_fs * 0.3)
-    gap = int(max_fs * 0.12)
-    content_w = max(w for _, _, _, w, _ in prepared)
-    box_w = content_w + 2 * padx
-    if max_width:
-        box_w = min(box_w, max_width)
-    box_h = sum(lh for *_, lh in prepared) + gap * (len(prepared) - 1) + 2 * pady
+    # Each line gets its OWN rounded box hugging its width; consecutive boxes
+    # overlap vertically so they merge into one connected shape that curves
+    # inward where a line is shorter (the TikTok/CapCut caption look).
+    radius = int(max_fs * 0.42)
+    padx = radius + int(max_fs * 0.14)  # clears the corner + a little breathing room
+    pady = int(max_fs * 0.26)
+    merge = radius + int(max_fs * 0.12)  # vertical overlap between line boxes
+    cap = max_width if max_width else 10 ** 9
 
-    img = Image.new("RGBA", (box_w, box_h), (0, 0, 0, 0))
+    line_boxes = [(min(line_w + 2 * padx, cap), line_h + 2 * pady) for *_, line_w, line_h in prepared]
+    canvas_w = max(bw for bw, _ in line_boxes)
+    tops: list[int] = []
+    y = 0
+    for _, bh in line_boxes:
+        tops.append(y)
+        y += bh - merge
+    canvas_h = tops[-1] + line_boxes[-1][1]
+
+    img = Image.new("RGBA", (canvas_w, canvas_h), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
-    radius = min(radius0, box_h // 2, box_w // 2)
-    d.rounded_rectangle([0, 0, box_w - 1, box_h - 1], radius=radius,
-                        fill=(255, 255, 255, 255))
-
-    y = pady
-    for fs, f, runs, line_w, line_h in prepared:
-        x = (box_w - line_w) // 2
+    # White boxes first (overlaps merge into one shape)...
+    for (bw, bh), top in zip(line_boxes, tops):
+        bx = (canvas_w - bw) // 2
+        r = min(radius, bh // 2, bw // 2)
+        d.rounded_rectangle([bx, top, bx + bw - 1, top + bh - 1], radius=r,
+                            fill=(255, 255, 255, 255))
+    # ...then the text on top.
+    for (fs, f, runs, line_w, line_h), top in zip(prepared, tops):
+        x = (canvas_w - line_w) // 2
+        ty = top + pady
         for kind, val, w, im in runs:
             if kind == "text":
-                d.text((x, y), val, font=f, fill=(0, 0, 0, 255))
+                d.text((x, ty), val, font=f, fill=(0, 0, 0, 255))
             elif im is not None:
-                img.alpha_composite(im, (x + int(fs * 0.04), y + (line_h - im.height) // 2))
+                img.alpha_composite(im, (x + int(fs * 0.04), ty + (line_h - im.height) // 2))
             x += w
-        y += line_h + gap
 
     out_png.parent.mkdir(parents=True, exist_ok=True)
     img.save(out_png)
-    return box_w, box_h
+    return canvas_w, canvas_h
 
 
 def render_caption(

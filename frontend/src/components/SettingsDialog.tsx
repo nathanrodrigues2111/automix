@@ -613,6 +613,12 @@ export function SettingsDialog({
               onChange={(v) => setConfig({ ...config, short_end_card: v })}
             />
             <SwitchRow
+              title="Show artist name"
+              description="Show the artist above the track name on the Short. Off shows just the track (full titles run long)"
+              checked={config.short_show_artist ?? false}
+              onChange={(v) => setConfig({ ...config, short_show_artist: v })}
+            />
+            <SwitchRow
               title="EDMPAPA overlay"
               description="Show the EDMPAPA template on the Short. Off makes a clean full-width Short with just the titles"
               checked={config.short_overlay ?? true}

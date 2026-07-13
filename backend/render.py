@@ -1034,6 +1034,7 @@ def _render_short(
     max_content_s: float = _SHORT_MAX_CONTENT_S,
     end_card: bool = False,
     first_drop_s: float = 0.0,
+    show_artist: bool = False,
 ) -> Path | None:
     """Vertical Short reframing the rendered mix itself: the first minute of
     the beat-matched mix (as many drops as fit).
@@ -1134,7 +1135,7 @@ def _render_short(
         except Exception:
             t_fs = 80
         block: list[tuple[str, int]] = []
-        if artist:
+        if artist and show_artist:  # track name only by default — full titles run too long
             try:
                 a_fs = short_captions.fit_font_size(artist, font_path, 820, base=min(t_fs, 74))
             except Exception:
@@ -2415,6 +2416,7 @@ def render_mix(
                 max_content_s=float(config.get("short_max_s", 0.0) or 0.0),
                 end_card=bool(config.get("short_end_card", False)),
                 first_drop_s=s_first_kick,
+                show_artist=bool(config.get("short_show_artist", False)),
             )
             if short_path is not None:
                 record["short_path"] = "videos/" + short_path.relative_to(VIDEOS_DIR).as_posix()

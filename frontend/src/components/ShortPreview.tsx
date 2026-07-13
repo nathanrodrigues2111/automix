@@ -6,10 +6,11 @@ import type { FontInfo, RenderConfig } from "@/api/types"
 
 /**
  * A lightweight, self-contained mockup of the rendered vertical Short's
- * caption layout. NOT a real render — a 9:16 placeholder that approximates
- * how the title (top) and artist/track (bottom) boxes will look, updating
- * live as the Short title / font change. Sizes use container-query units
- * (cqw) so the captions stay proportional to the frame at any preview size.
+ * caption layout. NOT a real render — a 9:16 placeholder approximating how
+ * the title (top) and track (bottom) captions will look, updating live as the
+ * Short title / font / artist toggle change. Uses `box-decoration-break:clone`
+ * so each wrapped line gets its own rounded box (the TikTok/CapCut look), and
+ * container-query units (cqw) so it scales with the frame.
  */
 export function ShortPreview({ config }: { config: Omit<RenderConfig, "clips"> }) {
   const fonts = useFonts()
@@ -19,27 +20,28 @@ export function ShortPreview({ config }: { config: Omit<RenderConfig, "clips"> }
     id ? list.find((f) => f.id === id) : undefined
   const resolved = find(config.short_font) ?? find(config.title_font) ?? find(fonts.data?.default)
   const family = resolved?.family ?? "sans-serif"
-  const fontFamily = `'${family}', sans-serif`
 
   useEffect(() => {
     if (resolved) void ensureFontLoaded(resolved).catch(() => {})
   }, [resolved])
 
   const title = (config.short_title ?? "").trim()
+  const showArtist = config.short_show_artist ?? false
 
-  // Shared box look — padding + radius in em so they scale with the font size.
-  const box: CSSProperties = {
-    fontFamily,
+  // Per-line rounded box: `box-decoration-break: clone` clones the background,
+  // padding and radius onto every wrapped line, hugging each line's width.
+  const chip = (fontSize: string, opacity = 1): CSSProperties => ({
+    fontFamily: `'${family}', sans-serif`,
     fontWeight: 800,
     color: "#000",
     background: "#fff",
-    padding: "0.28em 0.55em",
-    borderRadius: "0.42em",
-    lineHeight: 1.08,
-    maxWidth: "88%",
-    textAlign: "center",
-    boxShadow: "0 0.4cqw 1.6cqw rgba(0,0,0,0.35)",
-  }
+    padding: "0.1em 0.42em",
+    borderRadius: "0.4em",
+    boxDecorationBreak: "clone",
+    WebkitBoxDecorationBreak: "clone",
+    fontSize,
+    opacity,
+  })
 
   return (
     <div className="space-y-2">
@@ -55,28 +57,30 @@ export function ShortPreview({ config }: { config: Omit<RenderConfig, "clips"> }
         }}
         aria-label="Short caption preview"
       >
-        {/* Title caption — upper area */}
-        <div className="absolute inset-x-0 top-[9%] flex justify-center">
-          <div
-            style={{ ...box, fontSize: "9cqw", opacity: title ? 1 : 0.45 }}
-          >
+        {/* Title — upper area */}
+        <div
+          className="absolute inset-x-0 top-[9%] px-[7%] text-center"
+          style={{ lineHeight: 1.5 }}
+        >
+          <span style={chip("9cqw", title ? 1 : 0.45)}>
             {title || "Your Short title"}
-          </div>
+          </span>
         </div>
 
-        {/* Artist / track caption — lower area (sample text) */}
-        <div className="absolute inset-x-0 bottom-[12%] flex justify-center">
-          <div style={{ ...box, fontSize: "9.5cqw" }}>
-            <div
-              className="uppercase"
-              style={{ fontSize: "0.62em", letterSpacing: "0.02em", lineHeight: 1.1 }}
-            >
-              Artist Name
-            </div>
-            <div className="uppercase" style={{ lineHeight: 1.02 }}>
-              Track Name
-            </div>
-          </div>
+        {/* Track name (+ optional artist) — lower area (sample text) */}
+        <div
+          className="absolute inset-x-0 bottom-[13%] px-[7%] text-center"
+          style={{ lineHeight: 1.5 }}
+        >
+          <span className="uppercase" style={chip("9.5cqw")}>
+            {showArtist && (
+              <>
+                <span style={{ fontSize: "0.62em" }}>Artist Name</span>
+                <br />
+              </>
+            )}
+            Track Name
+          </span>
         </div>
       </div>
     </div>

@@ -29,6 +29,7 @@ import {
 import { Progress } from "@/components/ui/progress"
 import { Input } from "@/components/ui/input"
 import { Player } from "@/components/Player"
+import { ShortPreview } from "@/components/ShortPreview"
 import { useCancelJob, useRender, useRevealFile, mediaUrl } from "@/api/client"
 import type { RenderConfig } from "@/api/types"
 import type { ProgressMap } from "@/hooks/useProgressSocket"
@@ -161,6 +162,9 @@ export function RenderDialog({
                 className="h-8 text-sm"
               />
             </div>
+            {config.make_short !== false && (
+              <ShortPreview config={{ ...config, short_title: shortTitle }} />
+            )}
           </div>
         )}
 

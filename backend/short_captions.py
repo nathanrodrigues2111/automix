@@ -34,8 +34,13 @@ def _is_emoji_run(s: str) -> bool:
 def _emoji_image(ch: str, size: int, emoji_font: Path) -> Image.Image | None:
     try:
         f = ImageFont.truetype(str(emoji_font), _NOTO_PPEM)
-        tmp = Image.new("RGBA", (_NOTO_PPEM + 24, _NOTO_PPEM + 24), (0, 0, 0, 0))
-        ImageDraw.Draw(tmp).text((12, 12), ch, font=f, embedded_color=True)
+        # Generous margin: some emoji (e.g. 🥰 with side hearts) have ink that
+        # extends well beyond the em square; a tight canvas clips them before
+        # the bbox crop.
+        pad = 70
+        side = _NOTO_PPEM + 2 * pad
+        tmp = Image.new("RGBA", (side, side), (0, 0, 0, 0))
+        ImageDraw.Draw(tmp).text((pad, pad), ch, font=f, embedded_color=True)
         bbox = tmp.getbbox()
         if not bbox:
             return None
@@ -98,9 +103,9 @@ def render_block(
 
     # Corner radius drives the padding: content must sit clear of the rounded
     # corners or glyphs at the edges (esp. wide emoji) get clipped by the arc.
-    radius0 = int(max_fs * 0.5)
-    padx = radius0 + int(max_fs * 0.3)
-    pady = int(max_fs * 0.38)
+    radius0 = int(max_fs * 0.42)
+    padx = radius0 + int(max_fs * 0.16)  # clears the corner, but hugs tighter
+    pady = int(max_fs * 0.3)
     gap = int(max_fs * 0.12)
     content_w = max(w for _, _, _, w, _ in prepared)
     box_w = content_w + 2 * padx

@@ -37,7 +37,6 @@ import {
 import { defaultApiBase, loadApiBase, setApiBase } from "@/lib/backend"
 import { ensureFontLoaded } from "@/lib/fonts"
 import { useFonts, useUploadFont } from "@/api/client"
-import { ShortPreview } from "@/components/ShortPreview"
 import { APP_VERSION, CHANGELOG } from "@/changelog"
 import type { RenderConfig } from "@/api/types"
 
@@ -595,7 +594,6 @@ export function SettingsDialog({
 
           <section className="space-y-3">
             <SectionLabel>Shorts</SectionLabel>
-            <ShortPreview config={config} />
             <SwitchRow
               title="Make a Short"
               description="Also render a vertical YouTube Short alongside the full video"

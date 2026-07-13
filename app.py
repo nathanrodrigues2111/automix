@@ -37,6 +37,24 @@ _bin = BASE / "bin"
 if _bin.is_dir():
     os.environ["PATH"] = str(_bin) + os.pathsep + os.environ.get("PATH", "")
 
+# A windowed (console=False) build has no console for child processes to
+# inherit, so on Windows every ffmpeg/ffprobe/yt-dlp call would flash open its
+# own console window. Force CREATE_NO_WINDOW on every subprocess the backend
+# spawns (patched before importing it; GUI children like explorer.exe are
+# unaffected, the flag only suppresses consoles).
+if sys.platform.startswith("win"):
+    import subprocess
+
+    _orig_popen_init = subprocess.Popen.__init__
+
+    def _no_window_init(self, *args, **kwargs):
+        kwargs["creationflags"] = (
+            kwargs.get("creationflags") or 0
+        ) | subprocess.CREATE_NO_WINDOW
+        _orig_popen_init(self, *args, **kwargs)
+
+    subprocess.Popen.__init__ = _no_window_init
+
 # The backend modules are top-level (the server runs with backend/ as cwd), so
 # put it on the path before importing.
 BACKEND_DIR = BASE / "backend"

@@ -77,8 +77,9 @@ if sys.platform != "darwin":
             str(ROOT / "packaging" / "splash.png"),
             binaries=a.binaries,
             datas=a.datas,
-            text_pos=(20, 360),
-            text_size=10,
+            # Status sits under the accent line, above the bottom credit line.
+            text_pos=(272, 292),
+            text_size=9,
             text_color="#7d8aa0",
             text_default="Starting…",
             minify_script=True,

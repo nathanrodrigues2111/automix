@@ -35,22 +35,23 @@ icon = Image.open(ROOT / "frontend" / "public" / "favicon.png").convert("RGBA")
 icon = icon.resize((108, 108), Image.LANCZOS)
 img.paste(icon, (W // 2 - 54, 64), icon)
 
-# Wordmark + tagline.
-bebas = ImageFont.truetype(str(ROOT / "assets" / "fonts" / "BebasNeue-Regular.ttf"), 56)
-small = ImageFont.truetype(str(ROOT / "assets" / "fonts" / "BebasNeue-Regular.ttf"), 20)
+# Wordmark; the live status text (pyi_splash) renders under the accent line.
+bebas = ImageFont.truetype(str(ROOT / "assets" / "fonts" / "BebasNeue-Regular.ttf"), 48)
+small = ImageFont.truetype(str(ROOT / "assets" / "fonts" / "BebasNeue-Regular.ttf"), 15)
 
 title = "AUTOMIX"
 tw = draw.textlength(title, font=bebas)
-draw.text(((W - tw) / 2, 192), title, font=bebas, fill=TITLE)
+draw.text(((W - tw) / 2, 196), title, font=bebas, fill=TITLE)
 
+# Accent underline under the wordmark.
+draw.rounded_rectangle((W // 2 - 32, 254, W // 2 + 32, 257), radius=2, fill=ACCENT)
+
+# Credit line at the very bottom (below the status text).
 tag = "EDM DROP-MIX BUILDER"
 tw = draw.textlength(tag, font=small)
-draw.text(((W - tw) / 2, 262), tag, font=small, fill=SUB)
+draw.text(((W - tw) / 2, H - 32), tag, font=small, fill=SUB)
 
-# Accent underline between wordmark and tagline.
-draw.rounded_rectangle((W // 2 - 36, 252, W // 2 + 36, 255), radius=2, fill=ACCENT)
-
-# Bottom hairline; the live status text (pyi_splash) renders just above it.
+# Bottom hairline.
 draw.rectangle((0, H - 2, W, H), fill=(17, 26, 44))
 
 img.save(OUT)

@@ -12,6 +12,7 @@ import {
   Repeat,
   Settings2,
   Sun,
+  X,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -357,6 +358,9 @@ export default function App() {
     }
 
   const [renderMode, setRenderMode] = useState<"preview" | "full" | null>(null)
+  // Active full-render job id, lifted here so the render dialog can be closed
+  // (minimized) mid-render and reopened from a floating indicator.
+  const [renderJobId, setRenderJobId] = useState<string | null>(null)
 
   // Opening the render dialog silences the app: the live mix preview stops
   // and any playing video pauses, so nothing talks over the render.
@@ -1022,7 +1026,10 @@ export default function App() {
             clips={clips}
             setClips={setClips}
             preview={livePreview}
-            onRender={() => setRenderMode("full")}
+            onRender={() => {
+              setRenderJobId(null)
+              setRenderMode("full")
+            }}
             onSaveProject={() => setProjectDialog("save")}
             onLoadProject={() => setProjectDialog("load")}
           />
@@ -1109,7 +1116,51 @@ export default function App() {
         onClose={() => setRenderMode(null)}
         config={renderConfig}
         progress={progress}
+        jobId={renderJobId}
+        onJobIdChange={setRenderJobId}
       />
+      {/* Floating render indicator when the dialog is minimized mid-render. */}
+      {renderJobId && renderMode === null && (() => {
+        const rp = progress[renderJobId]
+        const rdone = !!rp?.done
+        const rerr = rdone && !!rp && rp.message.toLowerCase().startsWith("error")
+        const ok = rdone && !rerr && rp?.message !== "Cancelled"
+        return (
+          <div className="fixed bottom-4 right-4 z-50 w-72 rounded-xl border border-border/70 bg-popover/95 p-3 shadow-2xl backdrop-blur">
+            <div className="flex items-center justify-between gap-2">
+              <span className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-primary/80">
+                {rdone ? (ok ? "Render ready" : "Render") : "Rendering"}
+              </span>
+              <button
+                type="button"
+                onClick={() => setRenderJobId(null)}
+                aria-label="Dismiss"
+                className="rounded p-0.5 text-muted-foreground hover:bg-accent/60 hover:text-foreground"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </div>
+            {!rdone && (
+              <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-secondary/60">
+                <div
+                  className="h-full rounded-full bg-primary transition-all"
+                  style={{ width: `${(rp?.percent ?? 0).toFixed(0)}%` }}
+                />
+              </div>
+            )}
+            <div className="mt-1.5 truncate text-[11px] text-muted-foreground">
+              {rp?.message ?? "Starting"}
+            </div>
+            <Button
+              size="sm"
+              className="mt-2 h-7 w-full text-xs"
+              onClick={() => setRenderMode("full")}
+            >
+              {rdone ? "View result" : "View progress"}
+            </Button>
+          </div>
+        )
+      })()}
     </div>
   )
 }

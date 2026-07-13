@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useRef, useState } from "react"
 import {
   Select,
   SelectContent,
@@ -13,6 +13,7 @@ import {
   Eye,
   FolderOpen,
   Loader2,
+  Pause,
   Play,
   Square,
 } from "lucide-react"
@@ -30,7 +31,13 @@ import { Progress } from "@/components/ui/progress"
 import { Input } from "@/components/ui/input"
 import { Player } from "@/components/Player"
 import { ShortPreview } from "@/components/ShortPreview"
-import { useCancelJob, useRender, useRevealFile, mediaUrl } from "@/api/client"
+import {
+  useCancelJob,
+  useRender,
+  useRevealFile,
+  useTracks,
+  mediaUrl,
+} from "@/api/client"
 import type { RenderConfig } from "@/api/types"
 import type { ProgressMap } from "@/hooks/useProgressSocket"
 
@@ -40,6 +47,10 @@ interface RenderDialogProps {
   onClose: () => void
   config: RenderConfig
   progress: ProgressMap
+  /** Active render job id, lifted to the parent so the dialog can be closed
+   *  (minimized) while a render runs and reopened from a floating indicator. */
+  jobId?: string | null
+  onJobIdChange?: (id: string | null) => void
 }
 
 export function RenderDialog({
@@ -48,12 +59,19 @@ export function RenderDialog({
   onClose,
   config,
   progress,
+  jobId: jobIdProp = null,
+  onJobIdChange,
 }: RenderDialogProps) {
   const isPreview = mode === "preview"
   const render = useRender()
   const cancelJob = useCancelJob()
   const reveal = useRevealFile()
-  const [jobId, setJobId] = useState<string | null>(null)
+  // Preview renders keep a local job id (never minimized); full renders use the
+  // lifted parent job id so they survive closing the dialog.
+  const [localJobId, setLocalJobId] = useState<string | null>(null)
+  const jobId = isPreview ? localJobId : jobIdProp
+  const setJobId = (id: string | null) =>
+    isPreview ? setLocalJobId(id) : onJobIdChange?.(id)
   const [resolution, setResolution] = useState<string>(
     config.resolution ?? "1080p",
   )
@@ -61,8 +79,58 @@ export function RenderDialog({
   const [shortOnly, setShortOnly] = useState<boolean>(config.short_only ?? false)
   const [shortTitle, setShortTitle] = useState<string>(config.short_title ?? "")
 
+  // Selected-track verification: play each clip's source from its start.
+  const tracks = useTracks()
+  const trackById = new Map((tracks.data ?? []).map((t) => [t.id, t]))
+  const [playingClip, setPlayingClip] = useState<number | null>(null)
+  const [playFrac, setPlayFrac] = useState(0) // 0-1 playback progress of the playing clip
+  const audioRef = useRef<HTMLAudioElement | null>(null)
+  const playStartRef = useRef(0)
+
+  const playClip = (i: number, trackId: string, startS: number) => {
+    const a = audioRef.current
+    const tr = trackById.get(trackId)
+    if (!a || !tr) return
+    if (playingClip === i) {
+      a.pause()
+      setPlayingClip(null)
+      return
+    }
+    playStartRef.current = Math.max(0, startS)
+    setPlayFrac(0)
+    a.src = mediaUrl(tr.path)
+    const onMeta = () => {
+      try {
+        a.currentTime = playStartRef.current
+      } catch {
+        /* seek may be unsupported until buffered */
+      }
+      void a.play().catch(() => {})
+    }
+    a.addEventListener("loadedmetadata", onMeta, { once: true })
+    a.load()
+    setPlayingClip(i)
+  }
+
+  const onAudioTime = () => {
+    const a = audioRef.current
+    if (!a || !a.duration || !isFinite(a.duration)) return
+    const s = playStartRef.current
+    const frac = (a.currentTime - s) / Math.max(0.1, a.duration - s)
+    setPlayFrac(Math.min(1, Math.max(0, frac)))
+  }
+
   // Reset job state when the dialog closes so reopening starts fresh.
   const handleClose = () => {
+    audioRef.current?.pause()
+    setPlayingClip(null)
+    // A full render still in flight is MINIMIZED (keep the job so the floating
+    // indicator can show it and reopen); otherwise reset.
+    const jp = jobId ? progress[jobId] : undefined
+    if (!isPreview && jobId && !jp?.done) {
+      onClose()
+      return
+    }
     setJobId(null)
     setActiveVideo("full")
     render.reset()
@@ -124,53 +192,107 @@ export function RenderDialog({
           </DialogDescription>
         </DialogHeader>
 
-        {!jobId && !isPreview && (
-          <div className="flex flex-col gap-5 sm:flex-row">
-            <div className="min-w-0 flex-1 space-y-3">
-              <div className="flex items-center justify-between gap-3">
-                <span className="text-sm text-muted-foreground">Resolution</span>
-                <Select value={resolution} onValueChange={setResolution}>
-                  <SelectTrigger className="h-8 w-40 text-xs">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="480p">480p</SelectItem>
-                    <SelectItem value="720p">720p (HD)</SelectItem>
-                    <SelectItem value="1080p">1080p (Full HD)</SelectItem>
-                    <SelectItem value="1440p">1440p (2K)</SelectItem>
-                    <SelectItem value="2160p">2160p (4K)</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <label className="flex cursor-pointer items-center justify-between gap-3">
-                <span className="text-sm text-muted-foreground">
-                  Only render the Short
-                </span>
-                <input
-                  type="checkbox"
-                  className="h-4 w-4 shrink-0 accent-[var(--primary)]"
-                  checked={shortOnly}
-                  onChange={(e) => setShortOnly(e.target.checked)}
-                />
-              </label>
-              <div className="space-y-1.5">
-                <span className="text-sm text-muted-foreground">Short title</span>
-                <Input
-                  value={shortTitle}
-                  onChange={(e) => setShortTitle(e.target.value)}
-                  placeholder="Optional caption for the Short"
-                  aria-label="Short title caption"
-                  className="h-8 text-sm"
-                />
-              </div>
-            </div>
-            {config.make_short !== false && (
-              <div className="shrink-0 sm:w-[210px]">
-                <ShortPreview config={{ ...config, short_title: shortTitle }} />
+        <div className="flex min-w-0 flex-col gap-5 sm:flex-row">
+          <div className="min-w-0 flex-1 space-y-4">
+            {!jobId && !isPreview && (
+              <div className="space-y-4">
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="text-sm text-muted-foreground">Resolution</span>
+                    <Select value={resolution} onValueChange={setResolution}>
+                      <SelectTrigger className="h-8 w-40 text-xs">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="480p">480p</SelectItem>
+                        <SelectItem value="720p">720p (HD)</SelectItem>
+                        <SelectItem value="1080p">1080p (Full HD)</SelectItem>
+                        <SelectItem value="1440p">1440p (2K)</SelectItem>
+                        <SelectItem value="2160p">2160p (4K)</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <label className="flex cursor-pointer items-center justify-between gap-3">
+                    <span className="text-sm text-muted-foreground">
+                      Only render the Short
+                    </span>
+                    <input
+                      type="checkbox"
+                      className="h-4 w-4 shrink-0 accent-[var(--primary)]"
+                      checked={shortOnly}
+                      onChange={(e) => setShortOnly(e.target.checked)}
+                    />
+                  </label>
+                  <div className="space-y-1.5">
+                    <span className="text-sm text-muted-foreground">Short title</span>
+                    <Input
+                      value={shortTitle}
+                      onChange={(e) => setShortTitle(e.target.value)}
+                      placeholder="Optional caption for the Short"
+                      aria-label="Short title caption"
+                      className="h-8 text-sm"
+                    />
+                  </div>
+                </div>
+
+                {config.clips.length > 0 && (
+                  <div className="space-y-1.5">
+                    <div className="text-sm text-muted-foreground">
+                      Selected tracks ({config.clips.length})
+                    </div>
+                    <div className="max-h-40 min-w-0 space-y-0.5 overflow-y-auto rounded-lg border border-border/60 p-1">
+                      {config.clips.map((clip, i) => {
+                        const tr = trackById.get(clip.track_id)
+                        const label =
+                          clip.title || tr?.title || tr?.filename || `Clip ${i + 1}`
+                        const isPlaying = playingClip === i
+                        return (
+                          <div
+                            key={i}
+                            className="relative overflow-hidden rounded-md hover:bg-accent/30"
+                          >
+                            {isPlaying && (
+                              <div
+                                aria-hidden
+                                className="pointer-events-none absolute inset-y-0 left-0 bg-primary/25 transition-[width] duration-200 ease-linear"
+                                style={{ width: `${(playFrac * 100).toFixed(1)}%` }}
+                              />
+                            )}
+                            <div className="relative flex min-w-0 items-center gap-2 px-1.5 py-1">
+                              <button
+                                type="button"
+                                disabled={!tr}
+                                onClick={() => playClip(i, clip.track_id, clip.start_s ?? 0)}
+                                title={
+                                  !tr
+                                    ? "Source track not found"
+                                    : isPlaying
+                                      ? "Pause"
+                                      : "Play from the drop"
+                                }
+                                className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-primary transition-colors hover:bg-primary/15 disabled:opacity-40"
+                              >
+                                {isPlaying ? (
+                                  <Pause className="h-3.5 w-3.5 fill-current" />
+                                ) : (
+                                  <Play className="h-3.5 w-3.5 fill-current" />
+                                )}
+                              </button>
+                              <span className="w-5 shrink-0 text-right font-mono text-[11px] tabular-nums text-muted-foreground/60">
+                                {i + 1}
+                              </span>
+                              <span className="min-w-0 flex-1 truncate text-sm" title={label}>
+                                {label}
+                              </span>
+                            </div>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  </div>
+                )}
               </div>
             )}
-          </div>
-        )}
 
         {jobId && (
           <div className="space-y-2">
@@ -274,6 +396,20 @@ export function RenderDialog({
             </div>
           </div>
         )}
+          </div>
+
+          {!isPreview && config.make_short !== false && (
+            <div className="shrink-0 sm:w-[210px]">
+              <ShortPreview config={{ ...config, short_title: shortTitle }} />
+            </div>
+          )}
+        </div>
+        <audio
+          ref={audioRef}
+          className="hidden"
+          onTimeUpdate={onAudioTime}
+          onEnded={() => setPlayingClip(null)}
+        />
 
         <DialogFooter>
           {jobId && !done && (

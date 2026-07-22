@@ -5,7 +5,6 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Automix. Beat-matched EDM drop mixes, rendered automatically</title>
 <meta name="description" content="Automix imports tracks from YouTube playlists or your own files, detects every drop, and renders beat-matched, branded video mixes. Built for the EDMPAPA YouTube channel.">
-<link rel="icon" href="favicon.svg" type="image/svg+xml">
 <link rel="icon" href="favicon.png" type="image/png">
 <style>
   :root {
@@ -15,11 +14,10 @@
     --border: #1e2537;
     --text: #e8ecf4;
     --muted: #93a0b4;
-    --accent: #863bff;
-    --accent-deep: #6d23e0;
-    --accent-blue: #47bfff;
-    --accent-soft: rgba(134, 59, 255, 0.14);
-    --accent-line: rgba(134, 59, 255, 0.38);
+    --accent: #2b7fff;
+    --accent-deep: #1f66db;
+    --accent-soft: rgba(43, 127, 255, 0.14);
+    --accent-line: rgba(43, 127, 255, 0.35);
     --amber: #f59e0b;
   }
   * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -43,7 +41,7 @@
   }
   .nav-inner { display: flex; align-items: center; justify-content: space-between; height: 60px; }
   .logo { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 17px; color: var(--text); letter-spacing: 0.2px; }
-  .logo-mark { width: 26px; height: 25px; display: block; }
+  .logo-mark { width: 26px; height: 26px; display: block; border-radius: 6px; }
   .nav-links { display: flex; align-items: center; gap: 22px; font-size: 14px; }
   .nav-links a:not(.btn) { color: var(--muted); }
   .nav-links a:not(.btn):hover { color: var(--text); }
@@ -63,7 +61,7 @@
   .hero::before {
     content: ""; position: absolute; inset: -40% -20% auto;
     height: 480px; pointer-events: none;
-    background: radial-gradient(ellipse at 50% 0%, rgba(134, 59, 255, 0.18), transparent 65%);
+    background: radial-gradient(ellipse at 50% 0%, rgba(43, 127, 255, 0.16), transparent 65%);
   }
   .tag {
     display: inline-block; margin-bottom: 18px; padding: 5px 14px;
@@ -179,7 +177,7 @@
 
 <nav>
   <div class="wrap nav-inner">
-    <div class="logo"><img class="logo-mark" src="favicon.svg" alt=""> Automix</div>
+    <div class="logo"><img class="logo-mark" src="favicon.png" alt=""> Automix</div>
     <div class="nav-links">
       <a href="#how">How it works</a>
       <a href="#features">Features</a>
@@ -191,7 +189,7 @@
 
 <header class="hero">
   <div class="wrap">
-    <img src="favicon.svg" alt="" width="60" height="58" style="margin-bottom: 20px; filter: drop-shadow(0 6px 24px rgba(134, 59, 255, 0.45));">
+    <img src="favicon.png" alt="" width="64" height="64" style="margin-bottom: 20px; border-radius: 14px; filter: drop-shadow(0 8px 28px rgba(43, 127, 255, 0.45));">
     <br>
     <span class="tag">Built for the EDMPAPA YouTube channel</span>
     <h1>Drop mixes, <span class="grad">on autopilot</span></h1>

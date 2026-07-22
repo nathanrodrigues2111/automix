@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="frontend/public/favicon.svg" width="72" alt="Automix">
+<img src="frontend/public/favicon.png" width="72" alt="Automix">
 
 # Automix
 
@@ -9,9 +9,9 @@
 Automix imports tracks from YouTube playlists or your own files, finds every drop,
 and renders beat-matched, branded video mixes. Hours of editing become minutes.
 
-[![Website](https://img.shields.io/badge/website-automix-863bff?style=flat-square)](https://nathanrodrigues2111.github.io/automix-site/)
-[![Web app](https://img.shields.io/badge/web%20app-open-863bff?style=flat-square)](https://nathanrodrigues2111.github.io/automix-app/)
-[![Download](https://img.shields.io/badge/download-latest%20release-863bff?style=flat-square)](https://github.com/nathanrodrigues2111/automix/releases/latest)
+[![Website](https://img.shields.io/badge/website-automix-2b7fff?style=flat-square)](https://nathanrodrigues2111.github.io/automix-site/)
+[![Web app](https://img.shields.io/badge/web%20app-open-2b7fff?style=flat-square)](https://nathanrodrigues2111.github.io/automix-app/)
+[![Download](https://img.shields.io/badge/download-latest%20release-2b7fff?style=flat-square)](https://github.com/nathanrodrigues2111/automix/releases/latest)
 
 **[Website](https://nathanrodrigues2111.github.io/automix-site/)** ·
 **[Open the app](https://nathanrodrigues2111.github.io/automix-app/)** ·

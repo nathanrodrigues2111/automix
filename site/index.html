@@ -1,0 +1,376 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Automix. Beat-matched EDM drop mixes, rendered automatically</title>
+<meta name="description" content="Automix imports tracks from YouTube playlists or your own files, detects every drop, and renders beat-matched, branded video mixes. Built for the EDMPAPA YouTube channel.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%233b82f6'/%3E%3Cpath d='M12 9l12 7-12 7z' fill='white'/%3E%3C/svg%3E">
+<style>
+  :root {
+    --bg: #07090f;
+    --bg-soft: #0d1119;
+    --card: #111624;
+    --border: #1e2537;
+    --text: #e8ecf4;
+    --muted: #93a0b4;
+    --accent: #3b82f6;
+    --accent-soft: rgba(59, 130, 246, 0.14);
+    --accent-line: rgba(59, 130, 246, 0.35);
+    --amber: #f59e0b;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, Ubuntu, sans-serif;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+  a { color: var(--accent); text-decoration: none; }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 0 24px; }
+
+  /* Nav */
+  nav {
+    position: sticky; top: 0; z-index: 10;
+    background: rgba(7, 9, 15, 0.82);
+    backdrop-filter: blur(12px);
+    border-bottom: 1px solid var(--border);
+  }
+  .nav-inner { display: flex; align-items: center; justify-content: space-between; height: 60px; }
+  .logo { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 17px; color: var(--text); letter-spacing: 0.2px; }
+  .logo-mark {
+    width: 28px; height: 28px; border-radius: 7px;
+    background: var(--accent-soft); border: 1px solid var(--accent-line);
+    display: grid; place-items: center; color: var(--accent); font-size: 13px;
+  }
+  .nav-links { display: flex; align-items: center; gap: 22px; font-size: 14px; }
+  .nav-links a { color: var(--muted); }
+  .nav-links a:hover { color: var(--text); }
+  .btn {
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 9px 18px; border-radius: 9px; font-size: 14px; font-weight: 600;
+    border: 1px solid transparent; cursor: pointer; transition: all 0.15s ease;
+  }
+  .btn-primary { background: var(--accent); color: #fff; }
+  .btn-primary:hover { background: #2f6fe0; }
+  .btn-ghost { border-color: var(--border); color: var(--text); background: transparent; }
+  .btn-ghost:hover { border-color: var(--accent-line); background: var(--accent-soft); }
+
+  /* Hero */
+  .hero { padding: 84px 0 56px; text-align: center; position: relative; overflow: hidden; }
+  .hero::before {
+    content: ""; position: absolute; inset: -40% -20% auto;
+    height: 480px; pointer-events: none;
+    background: radial-gradient(ellipse at 50% 0%, rgba(59, 130, 246, 0.16), transparent 65%);
+  }
+  .tag {
+    display: inline-block; margin-bottom: 18px; padding: 5px 14px;
+    border: 1px solid var(--accent-line); border-radius: 999px;
+    background: var(--accent-soft); color: var(--accent);
+    font-size: 12.5px; font-weight: 600; letter-spacing: 0.4px;
+  }
+  h1 {
+    font-size: clamp(34px, 6vw, 58px); line-height: 1.1;
+    font-weight: 800; letter-spacing: -1px; margin-bottom: 18px;
+  }
+  h1 .grad {
+    background: linear-gradient(90deg, var(--text), var(--accent));
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+  }
+  .sub { max-width: 620px; margin: 0 auto 32px; color: var(--muted); font-size: 18px; }
+  .cta-row { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; margin-bottom: 12px; }
+  .cta-note { font-size: 13px; color: var(--muted); }
+
+  /* Waveform visual */
+  .wave-panel {
+    margin: 56px auto 0; max-width: 860px;
+    background: var(--bg-soft); border: 1px solid var(--border); border-radius: 14px;
+    padding: 22px 22px 16px; text-align: left;
+  }
+  .wave-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; }
+  .wave-title { font-size: 13px; font-weight: 600; color: var(--muted); }
+  .wave-badges { display: flex; gap: 8px; }
+  .badge {
+    font-size: 11px; font-weight: 700; padding: 3px 10px; border-radius: 999px;
+    letter-spacing: 0.5px;
+  }
+  .badge-drop { background: rgba(245, 158, 11, 0.15); color: var(--amber); border: 1px solid rgba(245, 158, 11, 0.35); }
+  .badge-bpm { background: var(--accent-soft); color: var(--accent); border: 1px solid var(--accent-line); }
+  .wave { display: flex; align-items: flex-end; gap: 3px; height: 96px; }
+  .wave span { flex: 1; border-radius: 2px 2px 0 0; background: #2a3550; }
+  .wave span.hot { background: var(--accent); }
+  .wave span.drop { background: var(--amber); }
+  .wave-caption { margin-top: 12px; font-size: 12.5px; color: var(--muted); }
+  .wave-caption b { color: var(--amber); font-weight: 600; }
+
+  /* Sections */
+  section { padding: 72px 0; }
+  .sec-head { text-align: center; margin-bottom: 48px; }
+  .sec-head h2 { font-size: clamp(26px, 4vw, 36px); font-weight: 800; letter-spacing: -0.5px; margin-bottom: 10px; }
+  .sec-head p { color: var(--muted); max-width: 560px; margin: 0 auto; }
+
+  /* Steps */
+  .steps { display: grid; grid-template-columns: repeat(4, 1fr); gap: 18px; }
+  .step {
+    background: var(--card); border: 1px solid var(--border); border-radius: 14px;
+    padding: 24px 20px; position: relative;
+  }
+  .step-num {
+    width: 30px; height: 30px; border-radius: 8px; display: grid; place-items: center;
+    background: var(--accent-soft); border: 1px solid var(--accent-line);
+    color: var(--accent); font-weight: 700; font-size: 14px; margin-bottom: 14px;
+  }
+  .step h3 { font-size: 16px; margin-bottom: 6px; }
+  .step p { font-size: 13.5px; color: var(--muted); }
+
+  /* Features */
+  #features { background: var(--bg-soft); border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+  .grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 18px; }
+  .card {
+    background: var(--card); border: 1px solid var(--border); border-radius: 14px;
+    padding: 22px 20px; transition: border-color 0.15s ease;
+  }
+  .card:hover { border-color: var(--accent-line); }
+  .card .ico { font-size: 20px; margin-bottom: 12px; display: block; }
+  .card h3 { font-size: 15px; margin-bottom: 6px; }
+  .card p { font-size: 13px; color: var(--muted); }
+
+  /* Downloads */
+  .dl-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 18px; margin-bottom: 22px; }
+  .dl {
+    display: block; background: var(--card); border: 1px solid var(--border); border-radius: 14px;
+    padding: 22px 20px; color: var(--text); text-align: center; transition: all 0.15s ease;
+  }
+  .dl:hover { border-color: var(--accent-line); transform: translateY(-2px); }
+  .dl .os { font-size: 26px; display: block; margin-bottom: 10px; }
+  .dl h3 { font-size: 15px; margin-bottom: 4px; }
+  .dl p { font-size: 12.5px; color: var(--muted); }
+  .dl-note {
+    max-width: 720px; margin: 0 auto; padding: 16px 20px;
+    background: var(--card); border: 1px solid var(--border); border-radius: 12px;
+    font-size: 13px; color: var(--muted); text-align: center;
+  }
+
+  /* Web app callout */
+  .callout {
+    display: flex; align-items: center; justify-content: space-between; gap: 24px;
+    background: linear-gradient(120deg, var(--accent-soft), transparent 60%), var(--card);
+    border: 1px solid var(--accent-line); border-radius: 16px; padding: 30px 32px;
+  }
+  .callout h3 { font-size: 20px; margin-bottom: 6px; }
+  .callout p { color: var(--muted); font-size: 14px; max-width: 520px; }
+
+  footer { border-top: 1px solid var(--border); padding: 34px 0; }
+  .foot { display: flex; justify-content: space-between; align-items: center; gap: 16px; flex-wrap: wrap; font-size: 13px; color: var(--muted); }
+
+  @media (max-width: 860px) {
+    .steps, .grid, .dl-grid { grid-template-columns: repeat(2, 1fr); }
+    .callout { flex-direction: column; align-items: flex-start; }
+    .nav-links a:not(.btn) { display: none; }
+  }
+  @media (max-width: 480px) {
+    .steps, .grid, .dl-grid { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="wrap nav-inner">
+    <div class="logo"><span class="logo-mark">&#9654;</span> Automix</div>
+    <div class="nav-links">
+      <a href="#how">How it works</a>
+      <a href="#features">Features</a>
+      <a href="#download">Download</a>
+      <a class="btn btn-primary" href="https://nathanrodrigues2111.github.io/automix-app/">Open the app</a>
+    </div>
+  </div>
+</nav>
+
+<header class="hero">
+  <div class="wrap">
+    <span class="tag">Built for the EDMPAPA YouTube channel</span>
+    <h1>Drop mixes, <span class="grad">on autopilot</span></h1>
+    <p class="sub">
+      Automix imports tracks from YouTube playlists or your own files, finds every drop,
+      and renders beat-matched, branded video mixes. Hours of editing become minutes.
+    </p>
+    <div class="cta-row">
+      <a class="btn btn-primary" href="#download">Download for desktop</a>
+      <a class="btn btn-ghost" href="https://nathanrodrigues2111.github.io/automix-app/">Use in the browser</a>
+    </div>
+    <div class="cta-note">Windows, macOS and Linux. Free.</div>
+
+    <div class="wave-panel" aria-hidden="true">
+      <div class="wave-head">
+        <span class="wave-title">Drop detection</span>
+        <div class="wave-badges">
+          <span class="badge badge-bpm">128 BPM</span>
+          <span class="badge badge-drop">DROP 1:37</span>
+        </div>
+      </div>
+      <div class="wave" id="wave"></div>
+      <div class="wave-caption">
+        Automix scores <b>sub-bass energy jumps</b> to find real drops, then snaps every clip to the exact kick.
+      </div>
+    </div>
+  </div>
+</header>
+
+<section id="how">
+  <div class="wrap">
+    <div class="sec-head">
+      <h2>From playlist to finished mix</h2>
+      <p>Four steps. Most of them run on their own.</p>
+    </div>
+    <div class="steps">
+      <div class="step">
+        <div class="step-num">1</div>
+        <h3>Import</h3>
+        <p>Paste a YouTube playlist, pick the tracks you want, or drag and drop your own video files straight onto the track list.</p>
+      </div>
+      <div class="step">
+        <div class="step-num">2</div>
+        <h3>Detect</h3>
+        <p>Every track is analyzed automatically: BPM, key, and drops found by sub-bass energy, so vocal choruses never fool it.</p>
+      </div>
+      <div class="step">
+        <div class="step-num">3</div>
+        <h3>Arrange</h3>
+        <p>Add drops to the timeline, trim on a zoomable waveform with a beat grid, and hear the real crossfades in the live preview.</p>
+      </div>
+      <div class="step">
+        <div class="step-num">4</div>
+        <h3>Render</h3>
+        <p>One click renders a branded 1080p mix with titles and intro, plus a vertical Short of the best drop for YouTube Shorts.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="features">
+  <div class="wrap">
+    <div class="sec-head">
+      <h2>The hard parts, handled</h2>
+      <p>Everything a drop mix needs to sound intentional instead of stitched together.</p>
+    </div>
+    <div class="grid">
+      <div class="card">
+        <span class="ico">&#127926;</span>
+        <h3>Real drop detection</h3>
+        <p>Candidates are scored on low-band energy under 150 Hz and validated against bass lift and kick periodicity.</p>
+      </div>
+      <div class="card">
+        <span class="ico">&#129686;</span>
+        <h3>Kick-aligned seams</h3>
+        <p>Every crossfade measures the actual kick grid on both sides and nudges itself so the incoming kick lands on the downbeat.</p>
+      </div>
+      <div class="card">
+        <span class="ico">&#127911;</span>
+        <h3>Live preview</h3>
+        <p>Equal-power crossfades in the browser with the video following along, so what you hear is what renders.</p>
+      </div>
+      <div class="card">
+        <span class="ico">&#127916;</span>
+        <h3>Branded output</h3>
+        <p>Full-frame channel overlay, track titles in your own fonts, and an intro animation timed to end exactly on the first kick.</p>
+      </div>
+      <div class="card">
+        <span class="ico">&#128241;</span>
+        <h3>Shorts, included</h3>
+        <p>Each render can also produce a vertical Short cut around the strongest drop, ready to upload.</p>
+      </div>
+      <div class="card">
+        <span class="ico">&#128193;</span>
+        <h3>Projects</h3>
+        <p>Each mix lives in its own workspace with its own tracks and exports. Switch projects without mixing up libraries.</p>
+      </div>
+      <div class="card">
+        <span class="ico">&#128266;</span>
+        <h3>Consistent loudness</h3>
+        <p>Every clip is normalized to -14 LUFS, the YouTube target, and previews are matched so there are no surprises.</p>
+      </div>
+      <div class="card">
+        <span class="ico">&#128274;</span>
+        <h3>Local first</h3>
+        <p>Everything runs on your machine. Your library, analysis and renders never leave your computer.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="download">
+  <div class="wrap">
+    <div class="sec-head">
+      <h2>Download Automix</h2>
+      <p>Self-contained desktop app. No installs of ffmpeg or Python needed, everything is bundled.</p>
+    </div>
+    <div class="dl-grid">
+      <a class="dl" href="https://github.com/nathanrodrigues2111/automix/releases/latest/download/Automix-windows-x64-setup.exe">
+        <span class="os">&#129706;</span>
+        <h3>Windows</h3>
+        <p>Installer, x64</p>
+      </a>
+      <a class="dl" href="https://github.com/nathanrodrigues2111/automix/releases/latest/download/Automix-macos-arm64.dmg">
+        <span class="os">&#63743;</span>
+        <h3>macOS</h3>
+        <p>Apple Silicon, .dmg</p>
+      </a>
+      <a class="dl" href="https://github.com/nathanrodrigues2111/automix/releases/latest/download/Automix-linux-x64.tar.gz">
+        <span class="os">&#128039;</span>
+        <h3>Linux</h3>
+        <p>x64, .tar.gz</p>
+      </a>
+      <a class="dl" href="https://github.com/nathanrodrigues2111/automix/releases/latest/download/Automix-linux-arm64.tar.gz">
+        <span class="os">&#128039;</span>
+        <h3>Linux ARM</h3>
+        <p>arm64, .tar.gz</p>
+      </a>
+    </div>
+    <div class="dl-note">
+      Packages are currently unsigned. Windows SmartScreen may warn on first run, and on macOS
+      right-click the app and choose Open the first time.
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <div class="callout">
+      <div>
+        <h3>Prefer the browser?</h3>
+        <p>The Automix web app runs the same interface on GitHub Pages and connects to the Automix backend running on your machine, so your library stays local.</p>
+      </div>
+      <a class="btn btn-primary" href="https://nathanrodrigues2111.github.io/automix-app/">Open the web app</a>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap foot">
+    <div>Automix. Made for the <a href="https://www.youtube.com/@EDMPAPA">EDMPAPA</a> YouTube channel.</div>
+    <div>&copy; 2026 Nathan Rodrigues</div>
+  </div>
+</footer>
+
+<script>
+  // Waveform: deterministic bars with a build-up, drop and outro shape.
+  const wave = document.getElementById("wave");
+  const N = 72;
+  for (let i = 0; i < N; i++) {
+    const s = document.createElement("span");
+    const t = i / N;
+    let h;
+    if (t < 0.3) h = 18 + 40 * t + 12 * Math.abs(Math.sin(i * 1.7));          // intro
+    else if (t < 0.42) h = 30 + 190 * (t - 0.3) + 6 * Math.sin(i * 2.1);      // riser
+    else if (t < 0.72) { h = 68 + 26 * Math.abs(Math.sin(i * 1.3)); s.className = i % 4 === 0 ? "drop" : "hot"; } // drop body
+    else h = 24 + 30 * Math.abs(Math.sin(i * 1.9)) * (1 - (t - 0.72) * 2.4);  // outro
+    s.style.height = Math.max(8, Math.min(96, h)) + "px";
+    wave.appendChild(s);
+  }
+</script>
+
+</body>
+</html>

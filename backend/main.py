@@ -897,6 +897,167 @@ async def post_youtube_import(req: schemas.YouTubeImportRequest) -> dict:
     return {"job_id": job_id}
 
 
+# ---------- Local file import ----------
+
+LOCAL_IMPORT_EXTS = {
+    ".mp4", ".m4v", ".mov", ".mkv", ".webm", ".avi",
+    ".mpg", ".mpeg", ".ts", ".wmv", ".flv",
+}
+
+
+def _unique_import_dest(dest_dir: Path, stem: str) -> Path:
+    safe = re.sub(r'[\\/:*?"<>|]+', "_", stem).strip(" .") or "import"
+    dest = dest_dir / f"{safe}.mp4"
+    i = 2
+    while dest.exists():
+        dest = dest_dir / f"{safe} ({i}).mp4"
+        i += 1
+    return dest
+
+
+def _ingest_local_file(src: Path, dest_dir: Path, stem: str) -> Path:
+    """Move an uploaded video into the library as .mp4. Non-mp4 containers are
+    remuxed (stream copy); codecs mp4 can't hold fall back to a re-encode."""
+    basic = analysis_mod.probe_basic(src)
+    if not basic.get("codec_video"):
+        raise ValueError("no video stream (audio-only files are not supported)")
+    if not basic.get("codec_audio"):
+        raise ValueError("no audio stream")
+    dest = _unique_import_dest(dest_dir, stem)
+    if src.suffix.lower() in (".mp4", ".m4v"):
+        shutil.move(str(src), str(dest))
+        return dest
+    remux = subprocess.run(
+        ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+         "-i", str(src), "-c", "copy", "-movflags", "+faststart", str(dest)],
+        capture_output=True,
+    )
+    if remux.returncode == 0 and dest.exists() and dest.stat().st_size > 0:
+        return dest
+    dest.unlink(missing_ok=True)
+    enc = subprocess.run(
+        ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+         "-i", str(src),
+         "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
+         "-c:a", "aac", "-b:a", "192k",
+         "-movflags", "+faststart", str(dest)],
+        capture_output=True,
+    )
+    if enc.returncode != 0 or not dest.exists() or dest.stat().st_size == 0:
+        dest.unlink(missing_ok=True)
+        lines = enc.stderr.decode("utf-8", errors="ignore").strip().splitlines()
+        raise ValueError(lines[-1] if lines else "ffmpeg could not convert the file")
+    return dest
+
+
+@app.post("/api/import/files")
+async def post_import_files(files: list[UploadFile] = File(...)) -> dict:
+    """Import the user's own video files (multipart upload) into the active
+    project's library, then auto-analyze them. Same job/progress shape as the
+    YouTube import: stage "import" owns 0-50 (copy/convert), "analysis" 50-100."""
+    if not files:
+        raise HTTPException(status_code=400, detail="No files were sent")
+    for uf in files:
+        ext = Path(uf.filename or "").suffix.lower()
+        if ext not in LOCAL_IMPORT_EXTS:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Unsupported file type: {uf.filename or 'file'} "
+                    f"(supported: {', '.join(sorted(LOCAL_IMPORT_EXTS))})"
+                ),
+            )
+
+    job_id = uuid.uuid4().hex
+    progress = make_progress(job_id)
+    cancel_ev = _register_cancel(job_id)
+    imports_dir = active_imports_dir()
+    staging = paths.CACHE_DIR / "uploads" / job_id
+    staging.mkdir(parents=True, exist_ok=True)
+
+    def _stage_upload(uf: UploadFile, dest: Path) -> None:
+        with dest.open("wb") as out:
+            shutil.copyfileobj(uf.file, out, length=4 * 1024 * 1024)
+
+    # Drain the multipart body to disk before returning the job id — the
+    # spooled uploads don't outlive this request. Index prefix keeps
+    # same-named picks apart; it is stripped again for the final filename.
+    staged: list[tuple[Path, str]] = []
+    try:
+        for i, uf in enumerate(files):
+            stem = Path(Path(uf.filename or f"upload-{i}").name).stem
+            dest = staging / f"{i:03d}_{Path(uf.filename or 'upload').name}"
+            await asyncio.to_thread(_stage_upload, uf, dest)
+            staged.append((dest, stem))
+    except Exception:
+        shutil.rmtree(staging, ignore_errors=True)
+        _JOB_CANCEL.pop(job_id, None)
+        raise
+
+    async def _run():
+        try:
+            n = len(staged)
+            results: list[dict] = []
+            skipped: list[str] = []
+            for i, (src, stem) in enumerate(staged):
+                if cancel_ev.is_set():
+                    break
+                title = youtube_mod.clean_title(stem)
+                progress("import", i / n * 50.0, f"Importing {title}")
+                try:
+                    final = await asyncio.to_thread(
+                        _ingest_local_file, src, imports_dir, stem
+                    )
+                except Exception as e:
+                    skipped.append(stem)
+                    progress("import", (i + 1) / n * 50.0, f"Skipped {title}: {e}")
+                    continue
+                results.append({"path": str(final), "title": title})
+            if cancel_ev.is_set():
+                hub.publish_sync(
+                    {
+                        "job_id": job_id,
+                        "stage": "import",
+                        "percent": 100.0,
+                        "message": "Cancelled",
+                        "done": True,
+                    }
+                )
+                return
+            progress("analysis", 50.0, f"Analyzing {len(results)} imported tracks")
+            analyzed = await asyncio.to_thread(
+                _analyze_imported, results, progress, cancel_ev.is_set
+            )
+            msg = f"Imported and analyzed {analyzed}/{n} tracks"
+            if skipped:
+                msg += f" ({len(skipped)} skipped)"
+            hub.publish_sync(
+                {
+                    "job_id": job_id,
+                    "stage": "analysis",
+                    "percent": 100.0,
+                    "message": msg,
+                    "done": True,
+                }
+            )
+        except Exception as e:
+            hub.publish_sync(
+                {
+                    "job_id": job_id,
+                    "stage": "import",
+                    "percent": 100.0,
+                    "message": "Cancelled" if _is_cancelled_error(e) else f"error: {e}",
+                    "done": True,
+                }
+            )
+        finally:
+            shutil.rmtree(staging, ignore_errors=True)
+            _JOB_CANCEL.pop(job_id, None)
+
+    asyncio.create_task(_run())
+    return {"job_id": job_id}
+
+
 # ---------- Automix: import → analyze → pick drops → render ----------
 
 AUTOMIX_DEFAULT_CONFIG: dict[str, Any] = {

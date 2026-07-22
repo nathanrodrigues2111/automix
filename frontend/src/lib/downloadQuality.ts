@@ -18,6 +18,9 @@ export const DOWNLOAD_QUALITIES: DownloadQualityOption[] = [
 
 const KEY = "automix.downloadQuality.v1"
 
+/** Fired on window whenever the preference changes so every picker stays in sync. */
+export const DOWNLOAD_QUALITY_EVENT = "automix:download-quality"
+
 /** Stored height cap, or null for best available (the default). */
 export function loadDownloadMaxHeight(): number | null {
   try {
@@ -37,4 +40,5 @@ export function setDownloadMaxHeight(height: number | null): void {
   } catch {
     // storage unavailable — preference just won't persist
   }
+  window.dispatchEvent(new Event(DOWNLOAD_QUALITY_EVENT))
 }

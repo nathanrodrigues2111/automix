@@ -31,6 +31,7 @@ import { setThemePref, useThemePref, type ThemePref } from "@/lib/theme"
 import { ACCENTS, isPresetAccent, loadAccent, setAccent } from "@/lib/accent"
 import {
   DOWNLOAD_QUALITIES,
+  DOWNLOAD_QUALITY_EVENT,
   loadDownloadMaxHeight,
   setDownloadMaxHeight,
 } from "@/lib/downloadQuality"
@@ -106,6 +107,14 @@ export function SettingsDialog({
     loadDownloadMaxHeight(),
   )
   const [legalOpen, setLegalOpen] = useState(false)
+
+  // Reflect download-quality changes made from other pickers (e.g. the
+  // header's compact quality select).
+  useEffect(() => {
+    const handler = () => setDownloadHeight(loadDownloadMaxHeight())
+    window.addEventListener(DOWNLOAD_QUALITY_EVENT, handler)
+    return () => window.removeEventListener(DOWNLOAD_QUALITY_EVENT, handler)
+  }, [])
 
   // Title fonts: load every available font into the document so the
   // dropdown can preview each one in its own face.

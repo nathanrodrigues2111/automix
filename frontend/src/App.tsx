@@ -3,7 +3,9 @@ import type { MediaPlayerInstance } from "@vidstack/react"
 import { toast } from "sonner"
 import {
   Disc3,
+  Folder,
   FolderOpen,
+  Loader2,
   Plus,
   ListMusic,
   Monitor,
@@ -13,13 +15,14 @@ import {
   Repeat,
   Settings2,
   Sun,
+  Upload,
   X,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Separator } from "@/components/ui/separator"
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet"
-import { AutomixPanel } from "@/components/AutomixPanel"
+import { AutomixPanel, type ImportActivity } from "@/components/AutomixPanel"
 import { DesktopContextMenu } from "@/components/DesktopContextMenu"
 import { MixesPanel } from "@/components/MixesPanel"
 import { TrackList } from "@/components/TrackList"
@@ -37,6 +40,7 @@ import {
   useActiveProject,
   useFonts,
   useRefreshTitles,
+  useRevealFile,
   useSaveProjectConfig,
   useTracks,
 } from "@/api/client"
@@ -227,6 +231,73 @@ export default function App() {
   const [projectsOpen, setProjectsOpen] = useState(true)
   const activeProject = useActiveProject()
   const saveConfig = useSaveProjectConfig()
+  const reveal = useRevealFile()
+
+  const handleRevealProjectFolder = useCallback(() => {
+    const slug = activeProject.data?.slug
+    if (!slug) return
+    reveal.mutate(`videos/imports/${slug}`, {
+      onError: (e) => toast.error(`Could not open folder: ${e.message}`),
+    })
+  }, [activeProject.data?.slug, reveal])
+
+  // Drag-and-drop import: files dropped on the tracks section are routed into
+  // the AutomixPanel's local-file import flow (same progress panel, log, and
+  // completion handling as the Add files button). The panel registers its
+  // import function here and reports upload/job activity back for the
+  // importing banner shown above the track list.
+  const localImportRef = useRef<((files: File[]) => void) | null>(null)
+  const registerLocalImport = useCallback((fn: (files: File[]) => void) => {
+    localImportRef.current = fn
+  }, [])
+  const [importActivity, setImportActivity] = useState<ImportActivity>({
+    uploading: false,
+    job: null,
+  })
+  const [dropActive, setDropActive] = useState(false)
+  const dragDepthRef = useRef(0)
+
+  const dragHasFiles = (e: React.DragEvent) =>
+    Array.from(e.dataTransfer.types).includes("Files")
+  const handleTracksDragEnter = (e: React.DragEvent) => {
+    if (!dragHasFiles(e)) return
+    e.preventDefault()
+    dragDepthRef.current += 1
+    setDropActive(true)
+  }
+  const handleTracksDragOver = (e: React.DragEvent) => {
+    if (!dragHasFiles(e)) return
+    e.preventDefault()
+    e.dataTransfer.dropEffect = "copy"
+  }
+  const handleTracksDragLeave = (e: React.DragEvent) => {
+    if (!dragHasFiles(e)) return
+    dragDepthRef.current = Math.max(0, dragDepthRef.current - 1)
+    if (dragDepthRef.current === 0) setDropActive(false)
+  }
+  const handleTracksDrop = (e: React.DragEvent) => {
+    if (!dragHasFiles(e)) return
+    e.preventDefault()
+    dragDepthRef.current = 0
+    setDropActive(false)
+    const files = Array.from(e.dataTransfer.files)
+    const videos = files.filter(
+      (f) =>
+        f.type.startsWith("video/") ||
+        /\.(mp4|m4v|mov|mkv|webm|avi|mpg|mpeg|ts|wmv|flv)$/i.test(f.name),
+    )
+    if (videos.length === 0) {
+      toast.error("Only video files can be imported")
+      return
+    }
+    const skipped = files.length - videos.length
+    if (skipped > 0) {
+      toast.info(
+        `Skipped ${skipped} non-video ${skipped === 1 ? "file" : "files"}`,
+      )
+    }
+    localImportRef.current?.(videos)
+  }
 
   const [selectedTrackId, setSelectedTrackId] = useState<string | null>(null)
   const [dropStart, setDropStart] = useState(0)
@@ -737,19 +808,67 @@ export default function App() {
     [clips, trackById],
   )
 
+  // Importing banner above the track list: covers the multipart upload (no
+  // job id yet) and the import/download + analyze stages of header import
+  // jobs. Auto-Mix keeps its own panel, so it is excluded here.
+  const importJobProgress =
+    importActivity.job && importActivity.job.kind !== "automix"
+      ? progress[importActivity.job.id]
+      : undefined
+  const importRunning =
+    importActivity.uploading || (!!importJobProgress && !importJobProgress.done)
+  const importLabel =
+    importActivity.uploading && !importJobProgress
+      ? "Uploading files"
+      : importJobProgress?.message || "Importing"
+  const importPercent =
+    !importActivity.uploading && importJobProgress
+      ? Math.round(importJobProgress.percent)
+      : null
+
   // Shared between the desktop sidebar and the mobile slide-in drawer.
   const trackListEl = (
-    <TrackList
-      progress={progress}
-      selectedId={selectedTrackId}
-      onSelect={(t) => setSelectedTrackId(t.id)}
-      onAdd={handleAdd}
-      onPreviewDrop={handlePreviewDrop}
-      onPausePreview={handlePausePreview}
-      playingKey={videoIsPlaying ? previewingKey : null}
-      addedKeys={addedKeys}
-      referenceBpm={lastClipBpm}
-    />
+    <div
+      className="relative flex h-full min-w-0 flex-col"
+      onDragEnter={handleTracksDragEnter}
+      onDragOver={handleTracksDragOver}
+      onDragLeave={handleTracksDragLeave}
+      onDrop={handleTracksDrop}
+    >
+      {importRunning && (
+        <div className="flex shrink-0 items-center gap-2 border-b border-primary/20 bg-primary/10 px-3 py-1.5 text-xs text-primary">
+          <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" />
+          <span className="min-w-0 flex-1 truncate" title={importLabel}>
+            {importLabel}
+          </span>
+          {importPercent != null && (
+            <span className="shrink-0 tabular-nums">{importPercent}%</span>
+          )}
+        </div>
+      )}
+      <div className="min-h-0 flex-1 overflow-hidden">
+        <TrackList
+          progress={progress}
+          selectedId={selectedTrackId}
+          onSelect={(t) => setSelectedTrackId(t.id)}
+          onAdd={handleAdd}
+          onPreviewDrop={handlePreviewDrop}
+          onPausePreview={handlePausePreview}
+          playingKey={videoIsPlaying ? previewingKey : null}
+          addedKeys={addedKeys}
+          referenceBpm={lastClipBpm}
+        />
+      </div>
+      {dropActive && (
+        <div className="pointer-events-none absolute inset-0 z-20 flex flex-col items-center justify-center gap-2 border-2 border-dashed border-primary/60 bg-background/85 p-4 text-center backdrop-blur-sm">
+          <Upload className="h-6 w-6 text-primary" />
+          <div className="text-sm font-medium">Drop videos to import</div>
+          <div className="text-xs text-muted-foreground">
+            They land in this project's library, analyzed and ready to mix
+          </div>
+        </div>
+      )}
+    </div>
   )
   const trackCount = (tracks.data ?? []).length
 
@@ -774,6 +893,8 @@ export default function App() {
             progress={progress}
             variant="header"
             automixEnabled={automixEnabled}
+            registerLocalImport={registerLocalImport}
+            onImportStateChange={setImportActivity}
           />
         </div>
         <div className="flex shrink-0 items-center gap-1.5">
@@ -788,6 +909,17 @@ export default function App() {
             <span className="truncate">
               {activeProject.data?.name ?? "Projects"}
             </span>
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            aria-label="Open project folder"
+            title="Open the project's tracks folder in the file manager"
+            disabled={!activeProject.data?.slug}
+            onClick={handleRevealProjectFolder}
+            className="h-8 w-8 text-muted-foreground hover:text-foreground"
+          >
+            <Folder className="h-4 w-4" />
           </Button>
           <ThemeToggle />
           <Button

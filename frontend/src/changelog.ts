@@ -9,6 +9,17 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "0.14.0",
+    date: "2026-07-22",
+    title: "Import your own files and pick download quality faster",
+    items: [
+      "Import your own video files from your computer with the new Add files button, right next to Import only and Choose. They land in the library analyzed and ready to mix, just like YouTube imports",
+      "Drag and drop video files straight onto the Tracks list to import them, with a drop overlay while dragging and an importing banner that shows the current stage and progress",
+      "Open the active project's tracks folder in your file manager with the new folder button in the header",
+      "Pick the YouTube download quality right from the header with a compact quality selector next to the URL field. It stays in sync with the same setting in Settings > Downloads",
+    ],
+  },
+  {
     version: "0.13.2",
     date: "2026-07-14",
     title: "Startup fixes and a cleaner desktop app",

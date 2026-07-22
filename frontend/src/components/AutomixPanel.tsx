@@ -13,6 +13,7 @@ import {
   ListChecks,
   Loader2,
   RotateCcw,
+  Upload,
   Wand2,
   X,
 } from "lucide-react"
@@ -29,8 +30,16 @@ import { Input } from "@/components/ui/input"
 import { Player } from "@/components/Player"
 import { Progress } from "@/components/ui/progress"
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
+import {
   useAutomix,
   useCancelJob,
+  useImportFiles,
   usePlaylistEntries,
   useRevealFile,
   useYoutubeImport,
@@ -39,10 +48,22 @@ import {
 import type { PlaylistEntry } from "@/api/types"
 import type { ProgressMap } from "@/hooks/useProgressSocket"
 import { formatDuration } from "@/lib/format"
-import { loadDownloadMaxHeight } from "@/lib/downloadQuality"
+import {
+  DOWNLOAD_QUALITIES,
+  DOWNLOAD_QUALITY_EVENT,
+  loadDownloadMaxHeight,
+  setDownloadMaxHeight,
+} from "@/lib/downloadQuality"
 import { cn } from "@/lib/utils"
 
-type JobKind = "automix" | "import"
+export type JobKind = "automix" | "import" | "files"
+
+/** Upload/job activity reported to the app so other panels (e.g. the track
+ *  list) can show their own import indicator. */
+export interface ImportActivity {
+  uploading: boolean
+  job: { id: string; kind: JobKind } | null
+}
 
 interface LogLine {
   time: string
@@ -55,6 +76,11 @@ const STAGES = [
   { key: "download", label: "Download" },
   { key: "analysis", label: "Analyze" },
   { key: "render", label: "Render" },
+] as const
+
+const FILE_STAGES = [
+  { key: "import", label: "Import" },
+  { key: "analysis", label: "Analyze" },
 ] as const
 
 function isYoutubeUrl(url: string): boolean {
@@ -70,17 +96,26 @@ interface AutomixPanelProps {
    *  Auto-Mix action is hidden everywhere (header button + track chooser) and
    *  the playlist only feeds Import / Choose. Enabled in Settings → Interface. */
   automixEnabled?: boolean
+  /** Hands the app a function that routes files (e.g. dropped on the track
+   *  list) into this panel's local-file import flow, so drops get the same
+   *  progress panel, log, and completion handling as the Add files button. */
+  registerLocalImport?: (fn: (files: File[]) => void) => void
+  /** Reports upload/job activity changes (see ImportActivity). */
+  onImportStateChange?: (state: ImportActivity) => void
 }
 
 export function AutomixPanel({
   progress,
   variant = "card",
   automixEnabled = false,
+  registerLocalImport,
+  onImportStateChange,
 }: AutomixPanelProps) {
   const compact = variant === "header"
   const qc = useQueryClient()
   const automix = useAutomix()
   const youtubeImport = useYoutubeImport()
+  const importFiles = useImportFiles()
   const playlistEntries = usePlaylistEntries()
   const cancelJob = useCancelJob()
   const reveal = useRevealFile()
@@ -94,6 +129,10 @@ export function AutomixPanel({
 
   const [url, setUrl] = useState("")
   const [urlError, setUrlError] = useState<string | null>(null)
+  const [maxHeight, setMaxHeight] = useState<number | null>(() =>
+    loadDownloadMaxHeight(),
+  )
+  const fileInputRef = useRef<HTMLInputElement>(null)
   const [job, setJob] = useState<{ id: string; kind: JobKind } | null>(null)
   const [panelHidden, setPanelHidden] = useState(false)
   // While true, the status panel / mini indicator plays its slide-down exit
@@ -111,7 +150,11 @@ export function AutomixPanel({
   const p = job ? progress[job.id] : undefined
   const done = !!p?.done
   const isError = done && !!p && p.message.toLowerCase().startsWith("error")
-  const running = (!!job && !done) || automix.isPending || youtubeImport.isPending
+  const running =
+    (!!job && !done) ||
+    automix.isPending ||
+    youtubeImport.isPending ||
+    importFiles.isPending
   const outputPath =
     done && !isError && job?.kind === "automix" ? (p?.output_path ?? null) : null
   const fileName = outputPath ? (outputPath.split("/").pop() ?? outputPath) : null
@@ -123,6 +166,14 @@ export function AutomixPanel({
     setPanelHidden(false)
     setClosing(false)
   }, [job?.id])
+
+  // Keep the header quality picker in sync with changes made elsewhere
+  // (e.g. the Settings dialog).
+  useEffect(() => {
+    const handler = () => setMaxHeight(loadDownloadMaxHeight())
+    window.addEventListener(DOWNLOAD_QUALITY_EVENT, handler)
+    return () => window.removeEventListener(DOWNLOAD_QUALITY_EVENT, handler)
+  }, [])
 
   // Dismiss the floating status dropdown on any click outside the widget
   // (in the header variant). Mirrors the panel's close button.
@@ -178,7 +229,7 @@ export function AutomixPanel({
       toast.error(job.kind === "automix" ? "Auto-Mix failed" : "Import failed", {
         description: p.message,
       })
-    } else if (job.kind === "import") {
+    } else if (job.kind !== "automix") {
       toast.success(p.message || "Import complete")
     } else {
       toast.success("Auto-Mix complete", {
@@ -225,6 +276,7 @@ export function AutomixPanel({
     setJob(null)
     automix.reset()
     youtubeImport.reset()
+    importFiles.reset()
   }
 
   // A finished import self-dismisses: the tracks are already in the library and
@@ -233,7 +285,7 @@ export function AutomixPanel({
   // cancellations stay put (they need a "Try again" / acknowledgement), and
   // Auto-Mix keeps its panel (the finished-mix player lives there).
   useEffect(() => {
-    if (job?.kind !== "import" || !p?.done) return
+    if (!job || job.kind === "automix" || !p?.done) return
     const msg = p.message.toLowerCase()
     if (msg === "cancelled" || msg.startsWith("error")) return
     const startExit = window.setTimeout(() => setClosing(true), 700)
@@ -277,6 +329,28 @@ export function AutomixPanel({
     })
   }
 
+  const onLocalFiles = (list: FileList | File[] | null) => {
+    const files = list ? [...list] : []
+    if (files.length === 0) return
+    if (running) {
+      toast.info("Wait for the current job to finish before importing more")
+      return
+    }
+    importFiles.mutate(files, {
+      onSuccess: (res) => setJob({ id: res.job_id, kind: "files" }),
+      onError: (e) => toast.error(`Import failed: ${e.message}`),
+    })
+  }
+
+  // Hand the app a stable way to feed dropped files into this import flow,
+  // and keep it informed of upload/job activity for its own indicators.
+  useEffect(() => {
+    registerLocalImport?.(onLocalFiles)
+  })
+  useEffect(() => {
+    onImportStateChange?.({ uploading: importFiles.isPending, job })
+  }, [importFiles.isPending, job, onImportStateChange])
+
   const startWithSelection = (kind: JobKind) => {
     const u = url.trim()
     // null = no filter: the backend takes the entire playlist.
@@ -302,9 +376,11 @@ export function AutomixPanel({
     }
   }
 
-  const visibleStages =
-    job?.kind === "import" ? STAGES.slice(0, 1) : STAGES
-  const stageIdx = p ? STAGES.findIndex((s) => s.key === p.stage) : -1
+  const stageList: ReadonlyArray<{ key: string; label: string }> =
+    job?.kind === "files" ? FILE_STAGES : STAGES
+  const visibleStages: ReadonlyArray<{ key: string; label: string }> =
+    job?.kind === "import" ? STAGES.slice(0, 1) : stageList
+  const stageIdx = p ? stageList.findIndex((s) => s.key === p.stage) : -1
 
   const formEl = (
         <form
@@ -338,6 +414,38 @@ export function AutomixPanel({
               urlError && "border-destructive focus-visible:ring-destructive/40",
             )}
           />
+          <Select
+            value={maxHeight === null ? "best" : String(maxHeight)}
+            onValueChange={(v) => {
+              const h = v === "best" ? null : parseInt(v, 10)
+              setMaxHeight(h)
+              setDownloadMaxHeight(h)
+            }}
+            disabled={running}
+          >
+            <SelectTrigger
+              title="YouTube download quality"
+              aria-label="YouTube download quality"
+              className={cn(
+                "w-auto shrink-0 gap-1 bg-background/40 text-xs",
+                compact ? "h-8" : "h-9",
+              )}
+            >
+              <SelectValue>
+                {maxHeight === null ? "Best" : `${maxHeight}p`}
+              </SelectValue>
+            </SelectTrigger>
+            <SelectContent>
+              {DOWNLOAD_QUALITIES.map((q) => (
+                <SelectItem
+                  key={q.label}
+                  value={q.height === null ? "best" : String(q.height)}
+                >
+                  {q.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
           <div className="flex items-center gap-2">
             {automixEnabled && (
               <Button
@@ -349,7 +457,7 @@ export function AutomixPanel({
                   compact && "h-8",
                 )}
               >
-                {running && job?.kind !== "import" ? (
+                {automix.isPending || (running && job?.kind === "automix") ? (
                   <Loader2 className="h-4 w-4 animate-spin" />
                 ) : (
                   <Wand2 className="h-4 w-4" />
@@ -394,6 +502,36 @@ export function AutomixPanel({
                 <ListChecks className="h-3.5 w-3.5" />
               )}
               Choose
+            </Button>
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              accept="video/*,.mp4,.m4v,.mov,.mkv,.webm,.avi,.mpg,.mpeg,.ts,.wmv,.flv"
+              className="hidden"
+              onChange={(e) => {
+                onLocalFiles(e.target.files)
+                e.target.value = ""
+              }}
+            />
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={running}
+              onClick={() => fileInputRef.current?.click()}
+              title="Import video files from your computer"
+              className={cn(
+                "shrink-0 bg-background/40 text-xs",
+                compact ? "h-8" : "h-9",
+              )}
+            >
+              {importFiles.isPending || (running && job?.kind === "files") ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Upload className="h-3.5 w-3.5" />
+              )}
+              Add files
             </Button>
           </div>
         </form>
@@ -778,7 +916,7 @@ export function AutomixPanel({
                 <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-emerald-500" />
               )}
               <span className="flex-1 truncate text-xs font-semibold uppercase tracking-wider text-primary/80">
-                {job.kind === "import" ? "Importing" : "Auto-Mix"}
+                {job.kind === "automix" ? "Auto-Mix" : "Importing"}
               </span>
               <span className="shrink-0 font-mono text-[11px] tabular-nums text-muted-foreground">
                 {(p?.percent ?? 0).toFixed(0)}%

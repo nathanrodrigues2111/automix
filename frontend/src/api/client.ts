@@ -236,6 +236,31 @@ export function useYoutubeImport() {
   })
 }
 
+export function useImportFiles() {
+  return useMutation({
+    mutationFn: async (files: File[]) => {
+      const body = new FormData()
+      for (const file of files) body.append("files", file)
+      const res = await fetch(apiUrl("/api/import/files"), {
+        method: "POST",
+        body,
+      })
+      if (!res.ok) {
+        let detail = ""
+        try {
+          detail = await res.text()
+        } catch {
+          // ignore
+        }
+        throw new Error(
+          `${res.status} ${res.statusText}${detail ? `: ${detail}` : ""}`,
+        )
+      }
+      return (await res.json()) as JobResponse
+    },
+  })
+}
+
 export function useAnalyzeAll() {
   return useMutation({
     mutationFn: () =>

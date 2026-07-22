@@ -46,8 +46,9 @@
     display: grid; place-items: center; color: var(--accent); font-size: 13px;
   }
   .nav-links { display: flex; align-items: center; gap: 22px; font-size: 14px; }
-  .nav-links a { color: var(--muted); }
-  .nav-links a:hover { color: var(--text); }
+  .nav-links a:not(.btn) { color: var(--muted); }
+  .nav-links a:not(.btn):hover { color: var(--text); }
+  .nav-links .btn { padding: 8px 16px; }
   .btn {
     display: inline-flex; align-items: center; gap: 8px;
     padding: 9px 18px; border-radius: 9px; font-size: 14px; font-weight: 600;

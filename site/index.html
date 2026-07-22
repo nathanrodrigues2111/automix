@@ -5,7 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Automix. Beat-matched EDM drop mixes, rendered automatically</title>
 <meta name="description" content="Automix imports tracks from YouTube playlists or your own files, detects every drop, and renders beat-matched, branded video mixes. Built for the EDMPAPA YouTube channel.">
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%233b82f6'/%3E%3Cpath d='M12 9l12 7-12 7z' fill='white'/%3E%3C/svg%3E">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="icon" href="favicon.png" type="image/png">
 <style>
   :root {
     --bg: #07090f;
@@ -14,9 +15,11 @@
     --border: #1e2537;
     --text: #e8ecf4;
     --muted: #93a0b4;
-    --accent: #3b82f6;
-    --accent-soft: rgba(59, 130, 246, 0.14);
-    --accent-line: rgba(59, 130, 246, 0.35);
+    --accent: #863bff;
+    --accent-deep: #6d23e0;
+    --accent-blue: #47bfff;
+    --accent-soft: rgba(134, 59, 255, 0.14);
+    --accent-line: rgba(134, 59, 255, 0.38);
     --amber: #f59e0b;
   }
   * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -40,11 +43,7 @@
   }
   .nav-inner { display: flex; align-items: center; justify-content: space-between; height: 60px; }
   .logo { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 17px; color: var(--text); letter-spacing: 0.2px; }
-  .logo-mark {
-    width: 28px; height: 28px; border-radius: 7px;
-    background: var(--accent-soft); border: 1px solid var(--accent-line);
-    display: grid; place-items: center; color: var(--accent); font-size: 13px;
-  }
+  .logo-mark { width: 26px; height: 25px; display: block; }
   .nav-links { display: flex; align-items: center; gap: 22px; font-size: 14px; }
   .nav-links a:not(.btn) { color: var(--muted); }
   .nav-links a:not(.btn):hover { color: var(--text); }
@@ -55,7 +54,7 @@
     border: 1px solid transparent; cursor: pointer; transition: all 0.15s ease;
   }
   .btn-primary { background: var(--accent); color: #fff; }
-  .btn-primary:hover { background: #2f6fe0; }
+  .btn-primary:hover { background: var(--accent-deep); }
   .btn-ghost { border-color: var(--border); color: var(--text); background: transparent; }
   .btn-ghost:hover { border-color: var(--accent-line); background: var(--accent-soft); }
 
@@ -64,7 +63,7 @@
   .hero::before {
     content: ""; position: absolute; inset: -40% -20% auto;
     height: 480px; pointer-events: none;
-    background: radial-gradient(ellipse at 50% 0%, rgba(59, 130, 246, 0.16), transparent 65%);
+    background: radial-gradient(ellipse at 50% 0%, rgba(134, 59, 255, 0.18), transparent 65%);
   }
   .tag {
     display: inline-block; margin-bottom: 18px; padding: 5px 14px;
@@ -180,7 +179,7 @@
 
 <nav>
   <div class="wrap nav-inner">
-    <div class="logo"><span class="logo-mark">&#9654;</span> Automix</div>
+    <div class="logo"><img class="logo-mark" src="favicon.svg" alt=""> Automix</div>
     <div class="nav-links">
       <a href="#how">How it works</a>
       <a href="#features">Features</a>
@@ -192,6 +191,8 @@
 
 <header class="hero">
   <div class="wrap">
+    <img src="favicon.svg" alt="" width="60" height="58" style="margin-bottom: 20px; filter: drop-shadow(0 6px 24px rgba(134, 59, 255, 0.45));">
+    <br>
     <span class="tag">Built for the EDMPAPA YouTube channel</span>
     <h1>Drop mixes, <span class="grad">on autopilot</span></h1>
     <p class="sub">
